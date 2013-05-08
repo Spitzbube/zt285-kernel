@@ -119,6 +119,7 @@ static iomux_v3_cfg_t mx6dl_sabresd_pads[] = {
 	/* USB_OTG_PWR_EN */
 	MX6DL_PAD_EIM_D22__GPIO_3_22,
 	MX6DL_PAD_EIM_D30__USBOH3_USBH1_OC,
+#if 0
 	/*USB_H1 PWR EN*/
 	MX6DL_PAD_ENET_TXD1__GPIO_1_29,
 
@@ -132,9 +133,22 @@ static iomux_v3_cfg_t mx6dl_sabresd_pads[] = {
 	MX6DL_PAD_NANDF_D4__USDHC2_DAT4,
 	MX6DL_PAD_NANDF_D5__USDHC2_DAT5,
 	MX6DL_PAD_NANDF_D6__USDHC2_DAT6,
+#else
+	(iomux_v3_cfg_t)(0x0be0e209306dc2f4),
+    (iomux_v3_cfg_t)(0x03e0e300006e02f8),
+    (iomux_v3_cfg_t)(0x03e0e200006e42fc),
+    (iomux_v3_cfg_t)(0x03e0e200006e8300),
+    (iomux_v3_cfg_t)(0x03e0e200006ec304),
+    (iomux_v3_cfg_t)(0x03e0e200006f0308),
+    (iomux_v3_cfg_t)(0x03e0e2100067c294),
+    (iomux_v3_cfg_t)(0x03e0e21000680298),
+    (iomux_v3_cfg_t)(0x03e0e2100068429c),
+    (iomux_v3_cfg_t)(0x03e0e210006882a0),
+#endif
 	MX6DL_PAD_NANDF_D7__USDHC2_DAT7,
 	/* SD2_CD */
 	MX6DL_PAD_NANDF_D2__GPIO_2_2,
+#if 0
 	/* SD2_WP */
 	MX6DL_PAD_NANDF_D3__GPIO_2_3,
 
@@ -148,9 +162,22 @@ static iomux_v3_cfg_t mx6dl_sabresd_pads[] = {
 	MX6DL_PAD_SD3_DAT4__USDHC3_DAT4_50MHZ,
 	MX6DL_PAD_SD3_DAT5__USDHC3_DAT5_50MHZ,
 	MX6DL_PAD_SD3_DAT6__USDHC3_DAT6_50MHZ,
+#else
+    (iomux_v3_cfg_t)(0x0be0e209346f430c),
+    (iomux_v3_cfg_t)(0x03e0e300006f8310),
+    (iomux_v3_cfg_t)(0x03e0e200006fc314),
+    (iomux_v3_cfg_t)(0x03e0e20000700318),
+    (iomux_v3_cfg_t)(0x03e0e2000070431c),
+    (iomux_v3_cfg_t)(0x03e0e20000708320),
+    (iomux_v3_cfg_t)(0x03e0e2000070c324),
+    (iomux_v3_cfg_t)(0x03e0e20000710328),
+    (iomux_v3_cfg_t)(0x03e0e2000071432c),
+    (iomux_v3_cfg_t)(0x03e0e20000718330),
+#endif
 	MX6DL_PAD_SD3_DAT7__USDHC3_DAT7_50MHZ,
 	/* SD3_CD */
 	MX6DL_PAD_NANDF_D0__GPIO_2_0,
+#if 0
 	/* SD3_WP */
 	MX6DL_PAD_NANDF_D1__GPIO_2_1,
 
@@ -164,6 +191,18 @@ static iomux_v3_cfg_t mx6dl_sabresd_pads[] = {
 	MX6DL_PAD_SD4_DAT4__USDHC4_DAT4_50MHZ,
 	MX6DL_PAD_SD4_DAT5__USDHC4_DAT5_50MHZ,
 	MX6DL_PAD_SD4_DAT6__USDHC4_DAT6_50MHZ,
+#else
+    (iomux_v3_cfg_t)(0x0be0e20938720338),
+    (iomux_v3_cfg_t)(0x03e0e3000072433c),
+    (iomux_v3_cfg_t)(0x03e0e21000728340),
+    (iomux_v3_cfg_t)(0x03e0e2100072c344),
+    (iomux_v3_cfg_t)(0x03e0e21000730348),
+    (iomux_v3_cfg_t)(0x03e0e2100073434c),
+    (iomux_v3_cfg_t)(0x03e0e21000738350),
+    (iomux_v3_cfg_t)(0x03e0e2100073c354),
+    (iomux_v3_cfg_t)(0x03e0e21000740358),
+    (iomux_v3_cfg_t)(0x03e0e2100074435c),
+#endif
 	MX6DL_PAD_SD4_DAT7__USDHC4_DAT7_50MHZ,
 
 	/* HDMI_CEC_IN*/
