@@ -23,9 +23,17 @@
 static iomux_v3_cfg_t mx6dl_sabresd_pads[] = {
 	/* AUDMUX */
 	MX6DL_PAD_CSI0_DAT4__AUDMUX_AUD3_TXC,
+#if 0
 	MX6DL_PAD_CSI0_DAT5__AUDMUX_AUD3_TXD,
+#else
+	(iomux_v3_cfg_t)(0x026160400038c078),
+#endif
 	MX6DL_PAD_CSI0_DAT6__AUDMUX_AUD3_TXFS,
+#if 0
 	MX6DL_PAD_CSI0_DAT7__AUDMUX_AUD3_RXD,
+#else
+	(iomux_v3_cfg_t)(0x0261604000394080),
+#endif
 
 	/* CSPI */
 	MX6DL_PAD_KEY_COL0__ECSPI1_SCLK,
@@ -117,12 +125,11 @@ static iomux_v3_cfg_t mx6dl_sabresd_pads[] = {
 	MX6DL_PAD_ENET_RX_ER__ANATOP_USBOTG_ID,
 	MX6DL_PAD_EIM_D21__USBOH3_USBOTG_OC,
 	/* USB_OTG_PWR_EN */
-	MX6DL_PAD_EIM_D22__GPIO_3_22,
+	MX6DL_PAD_EIM_D22__GPIO_3_22, //71
 	MX6DL_PAD_EIM_D30__USBOH3_USBH1_OC,
-#if 0
 	/*USB_H1 PWR EN*/
 	MX6DL_PAD_ENET_TXD1__GPIO_1_29,
-
+#if 0
 	/* USDHC2 */
 	MX6DL_PAD_SD2_CLK__USDHC2_CLK,
 	MX6DL_PAD_SD2_CMD__USDHC2_CMD,
@@ -133,6 +140,7 @@ static iomux_v3_cfg_t mx6dl_sabresd_pads[] = {
 	MX6DL_PAD_NANDF_D4__USDHC2_DAT4,
 	MX6DL_PAD_NANDF_D5__USDHC2_DAT5,
 	MX6DL_PAD_NANDF_D6__USDHC2_DAT6,
+	MX6DL_PAD_NANDF_D7__USDHC2_DAT7,
 #else
 	(iomux_v3_cfg_t)(0x0be0e209306dc2f4),
     (iomux_v3_cfg_t)(0x03e0e300006e02f8),
@@ -145,13 +153,12 @@ static iomux_v3_cfg_t mx6dl_sabresd_pads[] = {
     (iomux_v3_cfg_t)(0x03e0e2100068429c),
     (iomux_v3_cfg_t)(0x03e0e210006882a0),
 #endif
-	MX6DL_PAD_NANDF_D7__USDHC2_DAT7,
 	/* SD2_CD */
 	MX6DL_PAD_NANDF_D2__GPIO_2_2,
-#if 0
 	/* SD2_WP */
 	MX6DL_PAD_NANDF_D3__GPIO_2_3,
 
+#if 0
 	/* USDHC3 */
 	MX6DL_PAD_SD3_CLK__USDHC3_CLK_50MHZ,
 	MX6DL_PAD_SD3_CMD__USDHC3_CMD_50MHZ,
@@ -162,6 +169,7 @@ static iomux_v3_cfg_t mx6dl_sabresd_pads[] = {
 	MX6DL_PAD_SD3_DAT4__USDHC3_DAT4_50MHZ,
 	MX6DL_PAD_SD3_DAT5__USDHC3_DAT5_50MHZ,
 	MX6DL_PAD_SD3_DAT6__USDHC3_DAT6_50MHZ,
+	MX6DL_PAD_SD3_DAT7__USDHC3_DAT7_50MHZ,
 #else
     (iomux_v3_cfg_t)(0x0be0e209346f430c),
     (iomux_v3_cfg_t)(0x03e0e300006f8310),
@@ -174,13 +182,12 @@ static iomux_v3_cfg_t mx6dl_sabresd_pads[] = {
     (iomux_v3_cfg_t)(0x03e0e2000071432c),
     (iomux_v3_cfg_t)(0x03e0e20000718330),
 #endif
-	MX6DL_PAD_SD3_DAT7__USDHC3_DAT7_50MHZ,
 	/* SD3_CD */
 	MX6DL_PAD_NANDF_D0__GPIO_2_0,
-#if 0
 	/* SD3_WP */
 	MX6DL_PAD_NANDF_D1__GPIO_2_1,
 
+#if 0
 	/* USDHC4 */
 	MX6DL_PAD_SD4_CLK__USDHC4_CLK_50MHZ,
 	MX6DL_PAD_SD4_CMD__USDHC4_CMD_50MHZ,
@@ -191,6 +198,7 @@ static iomux_v3_cfg_t mx6dl_sabresd_pads[] = {
 	MX6DL_PAD_SD4_DAT4__USDHC4_DAT4_50MHZ,
 	MX6DL_PAD_SD4_DAT5__USDHC4_DAT5_50MHZ,
 	MX6DL_PAD_SD4_DAT6__USDHC4_DAT6_50MHZ,
+	MX6DL_PAD_SD4_DAT7__USDHC4_DAT7_50MHZ,
 #else
     (iomux_v3_cfg_t)(0x0be0e20938720338),
     (iomux_v3_cfg_t)(0x03e0e3000072433c),
@@ -203,7 +211,6 @@ static iomux_v3_cfg_t mx6dl_sabresd_pads[] = {
     (iomux_v3_cfg_t)(0x03e0e21000740358),
     (iomux_v3_cfg_t)(0x03e0e2100074435c),
 #endif
-	MX6DL_PAD_SD4_DAT7__USDHC4_DAT7_50MHZ,
 
 	/* HDMI_CEC_IN*/
 	MX6DL_PAD_KEY_ROW2__GPIO_4_11,

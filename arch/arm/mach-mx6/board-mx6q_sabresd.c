@@ -1597,8 +1597,14 @@ static void __init mx6_sabresd_board_init(void)
 	else if (cpu_is_mx6dl()) {
 		mxc_iomux_v3_setup_multiple_pads(mx6dl_sabresd_pads,
 			ARRAY_SIZE(mx6dl_sabresd_pads));
+#if 0
 		num_cpu_idle_lock = 0xffff0000;
+#endif
 	}
+
+#if 1
+	 mxc_iomux_set_gpr_register(1, 21, 1, 1);
+#endif
 
 #ifdef CONFIG_FEC_1588
 	/* Set GPIO_16 input for IEEE-1588 ts_clk and RMII reference clock
@@ -1646,7 +1652,7 @@ static void __init mx6_sabresd_board_init(void)
 	imx6q_add_vdoa();
 	imx6q_add_mipi_dsi(&mipi_dsi_pdata);
 	imx6q_add_lcdif(&lcdif_data);
-	if (!disable_ldb)
+//	if (!disable_ldb)
 		imx6q_add_ldb(&ldb_data);
 	imx6q_add_v4l2_output(0);
 	imx6q_add_v4l2_capture(0);
