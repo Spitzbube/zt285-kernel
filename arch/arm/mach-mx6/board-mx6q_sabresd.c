@@ -476,6 +476,16 @@ static struct platform_device sabresd_vwm8962_reg_devices = {
 	},
 };
 
+#if 1
+static struct wm8962_pdata es8388_config_data = {
+        //TODO
+    .gpio_init = {
+        [2] = WM8962_GPIO_FN_DMICCLK,
+        [4] = 0x8000 | WM8962_GPIO_FN_DMICDAT,
+    },
+};
+#endif
+
 static void mx6q_csi0_cam_powerdown(int powerdown)
 {
 	if (powerdown)
@@ -1242,9 +1252,9 @@ static struct mipi_dsi_platform_data mipi_dsi_pdata = {
 static struct ipuv3_fb_platform_data sabresd_fb_data[] = {
 	{ /*fb0*/
 	.disp_dev = "ldb",
-	.interface_pix_fmt = IPU_PIX_FMT_RGB666,
+	.interface_pix_fmt = IPU_PIX_FMT_RGB24,
 	.mode_str = "LDB-XGA",
-	.default_bpp = 16,
+	.default_bpp = 32,
 	.int_clk = false,
 	}, {
 	.disp_dev = "hdmi",
@@ -1256,7 +1266,7 @@ static struct ipuv3_fb_platform_data sabresd_fb_data[] = {
 	.disp_dev = "ldb",
 	.interface_pix_fmt = IPU_PIX_FMT_RGB666,
 	.mode_str = "LDB-XGA",
-	.default_bpp = 16,
+	.default_bpp = 32,
 	.int_clk = false,
 	},
 };
@@ -1331,7 +1341,7 @@ static struct fsl_mxc_ldb_platform_data ldb_data = {
 	.ipu_id = 1,
 	.disp_id = 1,
 	.ext_ref = 1,
-	.mode = LDB_SEP1,
+	.mode = LDB_SEP0, //7
 	.sec_ipu_id = 1,
 	.sec_disp_id = 0,
 };
@@ -1386,7 +1396,7 @@ static struct fsl_mxc_capture_platform_data capture_data[] = {
 		.csi = 1,
 		.ipu = 0,
 		.mclk_source = 0,
-		.is_mipi = 1,
+		.is_mipi = 0,
 	},
 };
 
@@ -1684,6 +1694,7 @@ static void __init fixup_mxc_board(struct machine_desc *desc, struct tag *tags,
 	}
 }
 
+#if 0
 static struct mipi_csi2_platform_data mipi_csi2_pdata = {
 	.ipu_id	 = 0,
 	.csi_id = 1,
@@ -1692,6 +1703,7 @@ static struct mipi_csi2_platform_data mipi_csi2_pdata = {
 	.dphy_clk = "mipi_pllref_clk",
 	.pixel_clk = "emi_clk",
 };
+#endif
 
 #define SNVS_LPCR 0x38
 static void mx6_snvs_poweroff(void)
@@ -1780,7 +1792,9 @@ static void __init mx6_sabresd_board_init(void)
 	imx6q_add_v4l2_output(0);
 	imx6q_add_v4l2_capture(0, &capture_data[0]);
 	imx6q_add_v4l2_capture(1, &capture_data[1]);
+#if 0
 	imx6q_add_mipi_csi2(&mipi_csi2_pdata);
+#endif
 	imx6q_add_imx_snvs_rtc();
 
 	imx6q_add_imx_caam();
@@ -1791,6 +1805,10 @@ static void __init mx6_sabresd_board_init(void)
 	} else {
 		strcpy(mxc_i2c0_board_info[0].type, "wm8962");
 		mxc_i2c0_board_info[0].platform_data = &wm8962_config_data;
+#if 1
+        strcpy(mxc_i2c0_board_info[0].type, "es8388");
+        mxc_i2c0_board_info[0].platform_data = &es8388_config_data;
+#endif
 	}
 	imx6q_add_device_gpio_leds();
 
