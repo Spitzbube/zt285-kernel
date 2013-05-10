@@ -111,6 +111,9 @@ static int imx_hifi_hw_params(struct snd_pcm_substream *substream,
 				 channels == 1 ? 0xfffffffe : 0xfffffffc,
 				 2, 32);
 
+	dai_format = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_IF |
+		SND_SOC_DAIFMT_CBM_CFM;
+
 	/* set cpu DAI configuration */
 	ret = snd_soc_dai_set_fmt(cpu_dai, dai_format);
 	if (ret < 0)
@@ -474,7 +477,7 @@ static int __init imx_asoc_init(void)
 
 	if (machine_is_mx6q_sabresd())
 		imx_dai[0].codec_name = "wm8962.0-001a";
-	else if (machine_is_mx6sl_arm2())
+	else if (machine_is_mx6sl_arm2() | machine_is_mx6sl_evk())
 		imx_dai[0].codec_name = "wm8962.1-001a";
 
 	imx_snd_device = platform_device_alloc("soc-audio", 5);
