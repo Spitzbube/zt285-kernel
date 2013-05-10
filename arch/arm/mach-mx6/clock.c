@@ -29,8 +29,8 @@
 #include <mach/common.h>
 #include <mach/clock.h>
 #include <mach/mxc_dvfs.h>
-#include <mach/mxc_hdmi.h>
 #include <mach/ahci_sata.h>
+#include <mach/mxc_hdmi.h>
 #include "crm_regs.h"
 #include "cpu_op-mx6.h"
 #include "regs-anadig.h"
@@ -47,9 +47,16 @@ extern struct regulator *cpu_regulator;
 extern struct cpu_op *(*get_cpu_op)(int *op);
 extern int lp_high_freq;
 extern int lp_med_freq;
+extern int wait_mode_arm_podf;
 extern int lp_audio_freq;
+extern int cur_arm_podf;
 
 void __iomem *apll_base;
+
+static void __iomem *timer_base;
+static struct clk ipu1_clk;
+static struct clk ipu2_clk;
+static struct clk axi_clk;
 static struct clk pll1_sys_main_clk;
 static struct clk pll2_528_bus_main_clk;
 static struct clk pll2_pfd_400M;
@@ -66,6 +73,9 @@ static struct clk apbh_dma_clk;
 static struct clk openvg_axi_clk;
 static struct clk enfc_clk;
 static struct clk usdhc3_clk;
+static struct clk ipg_clk;
+static struct clk gpt_clk[];
+static struct clk clko2_clk;
 
 static struct cpu_op *cpu_op_tbl;
 static int cpu_op_nr;
@@ -77,6 +87,14 @@ static bool arm_needs_pll2_400;
 #define AUDIO_VIDEO_MIN_CLK_FREQ	650000000
 #define AUDIO_VIDEO_MAX_CLK_FREQ	1300000000
 DEFINE_SPINLOCK(clk_lock);
+#define V2_TCN			0x24
+#define V2_TSTAT		0x08
+#define V2_TSTAT_ROV	(1 << 5)
+#define V2_TCTL_CLK_OSC_DIV8	 (5 << 6)
+#define MXC_TCTL		0x00
+#define MXC_TPRER		0x04
+#define V2_TPRER_PRE24M_OFFSET	12
+#define V2_TPRER_PRE24M_MASK	0xF
 
 /* We need to check the exp status again after timer expiration,
  * as there might be interrupt coming between the first time exp
@@ -86,16 +104,38 @@ DEFINE_SPINLOCK(clk_lock);
  * timer expiration. */
 #define WAIT(exp, timeout) \
 ({ \
-	struct timespec nstimeofday; \
-	struct timespec curtime; \
+	u32 gpt_rate; \
+	u32 gpt_ticks; \
+	u32 gpt_cnt; \
+	u32 reg; \
 	int result = 1; \
-	getnstimeofday(&nstimeofday); \
+	gpt_rate = clk_get_rate(&gpt_clk[0]); \
+	gpt_ticks = timeout / (1000000000 / gpt_rate); \
+	reg = __raw_readl(timer_base + V2_TSTAT);\
+	/* Clear the GPT roll over interrupt. */ \
+	if (reg & V2_TSTAT_ROV) { \
+		reg |= V2_TSTAT_ROV;\
+		__raw_writel(reg, timer_base + V2_TSTAT);\
+	} \
+	gpt_cnt = __raw_readl(timer_base + V2_TCN); \
 	while (!(exp)) { \
-		getnstimeofday(&curtime); \
-		if ((curtime.tv_nsec - nstimeofday.tv_nsec) > (timeout)) { \
-			if (!(exp)) \
+		if ((__raw_readl(timer_base + V2_TCN) - gpt_cnt) > gpt_ticks) { \
+			if (!exp) \
 				result = 0; \
 			break; \
+		} else { \
+			reg = __raw_readl(timer_base + V2_TSTAT);\
+			if (reg & V2_TSTAT_ROV) { \
+				u32 old_cnt = gpt_cnt; \
+				/* Timer has rolled over. \
+				  * Calculate the new tcik count. \
+				  */ \
+				gpt_cnt = __raw_readl(timer_base + V2_TCN); \
+				gpt_ticks -= (0xFFFFFFFF - old_cnt + gpt_cnt); \
+				/* Clear the roll over interrupt. */ \
+				reg |= V2_TSTAT_ROV;\
+				__raw_writel(reg, timer_base + V2_TSTAT);\
+			} \
 		} \
 	} \
 	result; \
@@ -446,7 +486,7 @@ static int _clk_pll_enable(struct clk *clk)
 		__raw_writel(BM_ANADIG_ANA_MISC2_CONTROL0, apll_base + HW_ANADIG_ANA_MISC2_CLR);
 
 	/* Wait for PLL to lock */
-	if (!WAIT(__raw_readl(pllbase) & ANADIG_PLL_LOCK,
+	if (!WAIT((__raw_readl(pllbase) & ANADIG_PLL_LOCK),
 				SPIN_DELAY))
 		panic("pll enable failed\n");
 
@@ -462,6 +502,9 @@ static void _clk_pll_disable(struct clk *clk)
 {
 	unsigned int reg;
 	void __iomem *pllbase;
+
+	if ((arm_needs_pll2_400) && (clk == &pll2_528_bus_main_clk))
+		return;
 
 	pllbase = _get_pll_base(clk);
 
@@ -484,6 +527,10 @@ static unsigned long  _clk_pll1_main_get_rate(struct clk *clk)
 	unsigned int div;
 	unsigned long val;
 
+	/* If PLL1 is bypassed, its rate will be from OSC directly */
+	if (__raw_readl(PLL1_SYS_BASE_ADDR) & ANADIG_PLL_SYS_BYPASS_MASK)
+		return clk_get_rate(clk->parent);
+
 	div = __raw_readl(PLL1_SYS_BASE_ADDR) & ANADIG_PLL_SYS_DIV_SELECT_MASK;
 	val = (clk_get_rate(clk->parent) * div) / 2;
 	return val;
@@ -504,7 +551,7 @@ static int _clk_pll1_main_set_rate(struct clk *clk, unsigned long rate)
 	__raw_writel(reg, PLL1_SYS_BASE_ADDR);
 
 	/* Wait for PLL1 to lock */
-	if (!WAIT(__raw_readl(PLL1_SYS_BASE_ADDR) & ANADIG_PLL_LOCK,
+	if (!WAIT((__raw_readl(PLL1_SYS_BASE_ADDR) & ANADIG_PLL_LOCK),
 				SPIN_DELAY))
 		panic("pll1 enable failed\n");
 
@@ -513,8 +560,21 @@ static int _clk_pll1_main_set_rate(struct clk *clk, unsigned long rate)
 
 static void _clk_pll1_disable(struct clk *clk)
 {
+	void __iomem *pllbase;
+	u32 reg;
+
 	pll1_enabled = false;
-	_clk_pll_disable(clk);
+
+	/* Set PLL1 in bypass mode only. */
+	/* We need to be able to set the ARM-PODF bit
+	  * when the system enters WAIT mode. And setting
+	  * this bit requires PLL1_main to be enabled.
+	  */
+	pllbase = _get_pll_base(clk);
+
+	reg = __raw_readl(pllbase);
+	reg |= ANADIG_PLL_BYPASS;
+	__raw_writel(reg, pllbase);
 }
 
 static int _clk_pll1_enable(struct clk *clk)
@@ -780,6 +840,17 @@ static struct clk pll3_pfd_720M = {
 	.round_rate = pfd_round_rate,
 };
 
+static int pfd_540M_set_rate(struct clk *clk,  unsigned long rate)
+{
+	if ((clk_get_parent(&ipu1_clk) == clk) ||
+		(clk_get_parent(&ipu2_clk) == clk) ||
+		(clk_get_parent(&axi_clk) == clk))
+		WARN(1, "CHANGING rate of 540M PFD when IPU and \
+					AXI is sourced from it \n");
+
+	return pfd_set_rate(clk, rate);
+}
+
 static struct clk pll3_pfd_540M = {
 	__INIT_CLK_DEBUG(pll3_pfd_540M)
 	.parent = &pll3_usb_otg_main_clk,
@@ -787,7 +858,7 @@ static struct clk pll3_pfd_540M = {
 	.enable_shift = ANADIG_PFD1_FRAC_OFFSET,
 	.enable = _clk_pfd_enable,
 	.disable = _clk_pfd_disable,
-	.set_rate = pfd_set_rate,
+	.set_rate = pfd_540M_set_rate,
 	.get_rate = pfd_get_rate,
 	.round_rate = pfd_round_rate,
 	.get_rate = pfd_get_rate,
@@ -1171,6 +1242,7 @@ static int _clk_arm_set_rate(struct clk *clk, unsigned long rate)
 	u32 div;
 	unsigned long parent_rate;
 	unsigned long flags;
+	unsigned long ipg_clk_rate, max_arm_wait_clk;
 
 	for (i = 0; i < cpu_op_nr; i++) {
 		if (rate == cpu_op_tbl[i].cpu_rate)
@@ -1192,29 +1264,41 @@ static int _clk_arm_set_rate(struct clk *clk, unsigned long rate)
 			pll1_sw_clk.parent = &pll2_pfd_400M;
 		}
 	} else {
-		if (pll1_sw_clk.parent != &pll1_sys_main_clk) {
-			/* pll1_sw_clk was being sourced from pll2_400M. */
-			/* Enable PLL1 and set pll1_sw_clk parent as PLL1 */
-			if (!pll1_enabled)
-				pll1_sys_main_clk.enable(&pll1_sys_main_clk);
-			pll1_sw_clk.set_parent(&pll1_sw_clk, &pll1_sys_main_clk);
-			pll1_sw_clk.parent = &pll1_sys_main_clk;
-			arm_needs_pll2_400 = false;
-			if (pll2_pfd_400M.usecount == 0)
-				pll2_pfd_400M.disable(&pll2_pfd_400M);
-		}
+		/* Make sure PLL1 is enabled */
+		if (!pll1_enabled)
+			pll1_sys_main_clk.enable(&pll1_sys_main_clk);
+		/* Make sure PLL1 rate is what we want */
 		if (cpu_op_tbl[i].pll_rate != clk_get_rate(&pll1_sys_main_clk)) {
-			/* Change the PLL1 rate. */
-			if (pll2_pfd_400M.usecount != 0)
-				pll1_sw_clk.set_parent(&pll1_sw_clk, &pll2_pfd_400M);
-			else
-				pll1_sw_clk.set_parent(&pll1_sw_clk, &osc_clk);
+			/* If pll1_sw_clk is from pll1_sys_main_clk, switch it */
+			if (pll1_sw_clk.parent == &pll1_sys_main_clk) {
+				/* Change the PLL1 rate. */
+				if (pll2_pfd_400M.usecount != 0)
+					pll1_sw_clk.set_parent(&pll1_sw_clk, &pll2_pfd_400M);
+				else
+					pll1_sw_clk.set_parent(&pll1_sw_clk, &osc_clk);
+			}
 			pll1_sys_main_clk.set_rate(&pll1_sys_main_clk, cpu_op_tbl[i].pll_rate);
-			pll1_sw_clk.set_parent(&pll1_sw_clk, &pll1_sys_main_clk);
 		}
+		/* Make sure pll1_sw_clk is from pll1_sys_main_clk */
+		pll1_sw_clk.set_parent(&pll1_sw_clk, &pll1_sys_main_clk);
+		pll1_sw_clk.parent = &pll1_sys_main_clk;
+		arm_needs_pll2_400 = false;
+		if (pll2_pfd_400M.usecount == 0)
+			pll2_pfd_400M.disable(&pll2_pfd_400M);
 	}
 	parent_rate = clk_get_rate(clk->parent);
 	div = parent_rate / rate;
+	/* Calculate the ARM_PODF to be applied when the system
+	  * enters WAIT state. The max ARM clk is decided by the
+	  * ipg_clk and has to follow the ratio of ARM_CLK:IPG_CLK of 12:5.
+	  * For ex, when IPG is at 66MHz, ARM_CLK cannot be greater
+	  * than 158MHz.
+	  * Pre-calculate the optimal divider now.
+	  */
+	ipg_clk_rate = clk_get_rate(&ipg_clk);
+	max_arm_wait_clk = (12 * ipg_clk_rate) / 5;
+	wait_mode_arm_podf = parent_rate / max_arm_wait_clk;
+
 	if (div == 0)
 		div = 1;
 
@@ -1225,10 +1309,11 @@ static int _clk_arm_set_rate(struct clk *clk, unsigned long rate)
 		spin_unlock_irqrestore(&clk_lock, flags);
 		return -1;
 	}
-
 	/* Need PLL1-MAIN to be ON to write to ARM-PODF bit. */
 	if (!pll1_enabled)
 		pll1_sys_main_clk.enable(&pll1_sys_main_clk);
+
+	cur_arm_podf = div;
 
 	__raw_writel(div - 1, MXC_CCM_CACRR);
 
@@ -1890,16 +1975,50 @@ static struct clk vdo_axi_clk = {
 	.set_parent = _clk_vdo_axi_set_parent,
 };
 
-static struct clk vdoa_clk = {
+static struct clk vdoa_clk[] = {
+	{
 	__INIT_CLK_DEBUG(vdoa_clk)
 	.id = 0,
 	.parent = &vdo_axi_clk,
-	.secondary = &ipg_clk,
 	.enable_reg = MXC_CCM_CCGR2,
 	.enable_shift = MXC_CCM_CCGRx_CG13_OFFSET,
 	.enable = _clk_enable,
 	.disable = _clk_disable,
+	.secondary = &vdoa_clk[1],
+	.flags = AHB_HIGH_SET_POINT | CPU_FREQ_TRIG_UPDATE,
+	},
+	{
+	.parent =  &mmdc_ch0_axi_clk[0],
+	.secondary = &vdoa_clk[2],
+	},
+	{
+	.parent =  &mx6fast1_clk,
+	.secondary = &ocram_clk,
+	},
 };
+
+static unsigned long mx6_timer_rate(void)
+{
+	u32 parent_rate = clk_get_rate(&osc_clk);
+
+	u32 reg = __raw_readl(timer_base + MXC_TCTL);
+	u32 div;
+
+	if ((reg & V2_TCTL_CLK_OSC_DIV8) == V2_TCTL_CLK_OSC_DIV8) {
+		if (cpu_is_mx6q())
+			/* For MX6Q, only options are 24MHz or 24MHz/8*/
+			return parent_rate / 8;
+		else {
+			/* For MX6DLS and MX6Solo, the rate is based on the
+			  * divider value set in prescalar register. */
+			div = __raw_readl(timer_base + MXC_TPRER);
+			div = (div >> V2_TPRER_PRE24M_OFFSET) &
+					V2_TPRER_PRE24M_MASK;
+			return parent_rate / (div + 1);
+		}
+	}
+	return 0;
+}
 
 static unsigned long _clk_gpt_get_rate(struct clk *clk)
 {
@@ -2061,7 +2180,7 @@ static struct clk vpu_clk[] = {
 	.set_rate = _clk_vpu_axi_set_rate,
 	.get_rate = _clk_vpu_axi_get_rate,
 	.secondary = &vpu_clk[1],
-	.flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE,
+	.flags = AHB_HIGH_SET_POINT | CPU_FREQ_TRIG_UPDATE,
 	},
 	{
 	.parent =  &mmdc_ch0_axi_clk[0],
@@ -2151,7 +2270,7 @@ static struct clk ipu1_clk = {
 	.round_rate = _clk_ipu_round_rate,
 	.set_rate = _clk_ipu1_set_rate,
 	.get_rate = _clk_ipu1_get_rate,
-	.flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE,
+	.flags = AHB_HIGH_SET_POINT | CPU_FREQ_TRIG_UPDATE,
 };
 
 static int _clk_ipu2_set_parent(struct clk *clk, struct clk *parent)
@@ -2212,7 +2331,7 @@ static struct clk ipu2_clk = {
 	.round_rate = _clk_ipu_round_rate,
 	.set_rate = _clk_ipu2_set_rate,
 	.get_rate = _clk_ipu2_get_rate,
-	.flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE,
+	.flags = AHB_HIGH_SET_POINT | CPU_FREQ_TRIG_UPDATE,
 };
 
 static struct clk usdhc_dep_clk = {
@@ -2785,7 +2904,7 @@ static struct clk ldb_di0_clk = {
 	.set_rate = _clk_ldb_di0_set_rate,
 	.round_rate = _clk_ldb_di_round_rate,
 	.get_rate = _clk_ldb_di0_get_rate,
-	.flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE,
+	.flags = AHB_HIGH_SET_POINT | CPU_FREQ_TRIG_UPDATE,
 };
 
 static unsigned long _clk_ldb_di1_get_rate(struct clk *clk)
@@ -2856,7 +2975,7 @@ static struct clk ldb_di1_clk = {
 	.set_rate = _clk_ldb_di1_set_rate,
 	.round_rate = _clk_ldb_di_round_rate,
 	.get_rate = _clk_ldb_di1_get_rate,
-	.flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE,
+	.flags = AHB_HIGH_SET_POINT | CPU_FREQ_TRIG_UPDATE,
 };
 
 
@@ -3049,7 +3168,7 @@ static struct clk ipu1_di_clk[] = {
 	.set_rate = _clk_ipu1_di0_set_rate,
 	.round_rate = _clk_ipu_di_round_rate,
 	.get_rate = _clk_ipu1_di0_get_rate,
-	.flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE,
+	.flags = AHB_HIGH_SET_POINT | CPU_FREQ_TRIG_UPDATE,
 	},
 	{
 	 __INIT_CLK_DEBUG(ipu1_di_clk_1)
@@ -3063,7 +3182,7 @@ static struct clk ipu1_di_clk[] = {
 	.set_rate = _clk_ipu1_di1_set_rate,
 	.round_rate = _clk_ipu_di_round_rate,
 	.get_rate = _clk_ipu1_di1_get_rate,
-	.flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE,
+	.flags = AHB_HIGH_SET_POINT | CPU_FREQ_TRIG_UPDATE,
 	},
 };
 
@@ -3226,7 +3345,7 @@ static struct clk ipu2_di_clk[] = {
 	.set_rate = _clk_ipu2_di0_set_rate,
 	.round_rate = _clk_ipu_di_round_rate,
 	.get_rate = _clk_ipu2_di0_get_rate,
-	.flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE,
+	.flags = AHB_HIGH_SET_POINT | CPU_FREQ_TRIG_UPDATE,
 	},
 	{
 	 __INIT_CLK_DEBUG(ipu2_di_clk_1)
@@ -3240,7 +3359,7 @@ static struct clk ipu2_di_clk[] = {
 	.set_rate = _clk_ipu2_di1_set_rate,
 	.round_rate = _clk_ipu_di_round_rate,
 	.get_rate = _clk_ipu2_di1_get_rate,
-	.flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE,
+	.flags = AHB_HIGH_SET_POINT | CPU_FREQ_TRIG_UPDATE,
 	},
 };
 
@@ -4066,7 +4185,6 @@ static struct clk hdmi_clk[] = {
 	.enable_shift = MXC_CCM_CCGRx_CG2_OFFSET,
 	.enable = _clk_enable,
 	.disable = _clk_disable,
-	.flags = AHB_HIGH_SET_POINT | CPU_FREQ_TRIG_UPDATE,
 	},
 	{
 	 __INIT_CLK_DEBUG(hdmi_iahb_clk)
@@ -4088,7 +4206,6 @@ static struct clk caam_clk[] = {
 	.enable = _clk_enable,
 	.disable = _clk_disable,
 	.secondary = &caam_clk[1],
-	.flags = AHB_HIGH_SET_POINT | CPU_FREQ_TRIG_UPDATE,
 	},
 	{
 	 __INIT_CLK_DEBUG(caam_aclk_clk)
@@ -4720,10 +4837,34 @@ static struct clk usboh3_clk[] = {
 	},
 };
 
+static int _clk_mlb_set_parent(struct clk *clk, struct clk *parent)
+{
+	u32 sel, cbcmr = __raw_readl(MXC_CCM_CBCMR);
+
+	/*
+	 * In Rigel validatioin, the MLB sys_clock isn't using the
+	 * right frequency after boot.
+	 * In arik, the register CBCMR controls gpu2d clock, not mlb clock,
+	 * mlb is sourced from axi clock.
+	 * But In rigel, the axi clock is lower than in mx6q, so mlb need to
+	 * find a new clock root.
+	 * The gpu2d clock is the root of mlb clock in rigel.
+	 * Thus we need to add below code in mx6dl.
+	 * */
+	sel = _get_mux(parent, &axi_clk, &pll3_sw_clk,
+			&pll2_pfd_352M, &pll2_pfd_400M);
+
+	cbcmr &= ~MXC_CCM_CBCMR_MLB_CLK_SEL_MASK;
+	cbcmr |= sel << MXC_CCM_CBCMR_MLB_CLK_SEL_OFFSET;
+	__raw_writel(cbcmr, MXC_CCM_CBCMR);
+
+	return 0;
+}
+
 static struct clk mlb150_clk = {
 	__INIT_CLK_DEBUG(mlb150_clk)
 	.id = 0,
-	.parent = &ipg_clk,
+	.set_parent = _clk_mlb_set_parent,
 	.enable_reg = MXC_CCM_CCGR3,
 	.enable_shift = MXC_CCM_CCGRx_CG9_OFFSET,
 	.enable = _clk_enable,
@@ -4782,11 +4923,17 @@ static int _clk_clko_set_parent(struct clk *clk, struct clk *parent)
 		sel = 14;
 	else if (parent == &pll4_audio_main_clk)
 		sel = 15;
-	else
+	else if (parent == &clko2_clk) {
+		reg = __raw_readl(MXC_CCM_CCOSR);
+		reg |= MXC_CCM_CCOSR_CKOL_MIRROR_CKO2_MASK;
+		__raw_writel(reg, MXC_CCM_CCOSR);
+		return 0;
+	} else
 		return -EINVAL;
 
 	reg = __raw_readl(MXC_CCM_CCOSR);
-	reg &= ~MXC_CCM_CCOSR_CKOL_SEL_MASK;
+	reg &= ~(MXC_CCM_CCOSR_CKOL_MIRROR_CKO2_MASK |
+		 MXC_CCM_CCOSR_CKOL_SEL_MASK);
 	reg |= sel << MXC_CCM_CCOSR_CKOL_SEL_OFFSET;
 	__raw_writel(reg, MXC_CCM_CCOSR);
 	return 0;
@@ -4797,7 +4944,12 @@ static unsigned long _clk_clko_get_rate(struct clk *clk)
 	u32 reg = __raw_readl(MXC_CCM_CCOSR);
 	u32 div = ((reg & MXC_CCM_CCOSR_CKOL_DIV_MASK) >>
 			MXC_CCM_CCOSR_CKOL_DIV_OFFSET) + 1;
-	return clk_get_rate(clk->parent) / div;
+
+	if (clk->parent == &clko2_clk)
+		/* clko may output clko2 without divider */
+		return clk_get_rate(clk->parent);
+	else
+		return clk_get_rate(clk->parent) / div;
 }
 
 static int _clk_clko_set_rate(struct clk *clk, unsigned long rate)
@@ -4805,6 +4957,10 @@ static int _clk_clko_set_rate(struct clk *clk, unsigned long rate)
 	u32 reg;
 	u32 parent_rate = clk_get_rate(clk->parent);
 	u32 div = parent_rate / rate;
+
+	/* clko may output clko2 without divider */
+	if (clk->parent == &clko2_clk)
+		return 0;
 
 	if (div == 0)
 		div++;
@@ -4823,6 +4979,10 @@ static unsigned long _clk_clko_round_rate(struct clk *clk,
 {
 	u32 parent_rate = clk_get_rate(clk->parent);
 	u32 div = parent_rate / rate;
+
+	/* clko may output clko2 without divider */
+	if (clk->parent == &clko2_clk)
+		return parent_rate;
 
 	/* Make sure rate is not greater than the maximum value for the clock.
 	 * Also prevent a div of 0.
@@ -5094,7 +5254,7 @@ static struct clk_lookup lookups[] = {
 	_REGISTER_CLOCK("mxc_pwm.2", NULL, pwm_clk[2]),
 	_REGISTER_CLOCK("mxc_pwm.3", NULL, pwm_clk[3]),
 	_REGISTER_CLOCK(NULL, "pcie_clk", pcie_clk[0]),
-	_REGISTER_CLOCK("fec.0", NULL, enet_clk[0]),
+	_REGISTER_CLOCK("enet.0", NULL, enet_clk[0]),
 	_REGISTER_CLOCK(NULL, "imx_sata_clk", sata_clk[0]),
 	_REGISTER_CLOCK(NULL, "usboh3_clk", usboh3_clk[0]),
 	_REGISTER_CLOCK(NULL, "usb_phy1_clk", usb_phy1_clk),
@@ -5105,7 +5265,7 @@ static struct clk_lookup lookups[] = {
 	_REGISTER_CLOCK(NULL, "hdmi_isfr_clk", hdmi_clk[0]),
 	_REGISTER_CLOCK(NULL, "hdmi_iahb_clk", hdmi_clk[1]),
 	_REGISTER_CLOCK(NULL, "mipi_pllref_clk", mipi_pllref_clk),
-	_REGISTER_CLOCK(NULL, "vdoa", vdoa_clk),
+	_REGISTER_CLOCK(NULL, "vdoa", vdoa_clk[0]),
 	_REGISTER_CLOCK(NULL, NULL, aips_tz2_clk),
 	_REGISTER_CLOCK(NULL, NULL, aips_tz1_clk),
 	_REGISTER_CLOCK(NULL, "clko_clk", clko_clk),
@@ -5147,6 +5307,8 @@ int __init mx6_clocks_init(unsigned long ckil, unsigned long osc,
 	ckih2_reference = ckih2;
 	oscillator_reference = osc;
 
+	timer_base = ioremap(GPT_BASE_ADDR, SZ_4K);
+
 	apll_base = ioremap(ANATOP_BASE_ADDR, SZ_4K);
 
 	for (i = 0; i < ARRAY_SIZE(lookups); i++) {
@@ -5154,14 +5316,30 @@ int __init mx6_clocks_init(unsigned long ckil, unsigned long osc,
 		clk_debug_register(lookups[i].clk);
 	}
 
-	/* Disable un-necessary PFDs & PLLs */
+	/* Lower the ipg_perclk frequency to 6MHz. */
+	clk_set_rate(&ipg_perclk, 6000000);
+
+	/* Timer needs to be initialized first as the
+	  * the WAIT routines use GPT counter as
+	  * a delay.
+	  */
+	if (mx6q_revision() == IMX_CHIP_REVISION_1_0) {
+		gpt_clk[0].parent = &ipg_perclk;
+		gpt_clk[0].get_rate = NULL;
+	} else {
+		/* Here we use OSC 24M as GPT's clock source, no need to
+		enable gpt serial clock*/
+		gpt_clk[0].secondary = NULL;
+	}
+
+	mxc_timer_init(&gpt_clk[0], timer_base, MXC_INT_GPT);
+
+	clk_tree_init();
 
 	/* keep correct count. */
 	clk_enable(&cpu_clk);
 	clk_enable(&periph_clk);
-
-	clk_tree_init();
-
+	/* Disable un-necessary PFDs & PLLs */
 	if (pll2_pfd_400M.usecount == 0 && cpu_is_mx6q())
 		pll2_pfd_400M.disable(&pll2_pfd_400M);
 	pll2_pfd_352M.disable(&pll2_pfd_352M);
@@ -5184,8 +5362,8 @@ int __init mx6_clocks_init(unsigned long ckil, unsigned long osc,
 	sata_clk[0].disable(&sata_clk[0]);
 	pcie_clk[0].disable(&pcie_clk[0]);
 
-	/* Initialize Audio and Video PLLs to valid frequency (650MHz). */
-	clk_set_rate(&pll4_audio_main_clk, 650000000);
+	/* Initialize Audio and Video PLLs to valid frequency. */
+	clk_set_rate(&pll4_audio_main_clk, 176000000);
 	clk_set_rate(&pll5_video_main_clk, 650000000);
 
 	clk_set_parent(&ipu1_di_clk[0], &pll5_video_main_clk);
@@ -5204,9 +5382,11 @@ int __init mx6_clocks_init(unsigned long ckil, unsigned long osc,
 	*/
 	clk_set_parent(&gpu3d_shader_clk, &pll2_pfd_594M);
 	clk_set_rate(&gpu3d_shader_clk, 594000000);
-	clk_set_parent(&gpu3d_core_clk[0], &mmdc_ch0_axi_clk[0]);
-	clk_set_rate(&gpu3d_core_clk[0], 528000000);
 	if (cpu_is_mx6dl()) {
+		/*for mx6dl, change gpu3d core clk parant to 594_PFD */
+		clk_set_parent(&gpu3d_core_clk[0], &pll2_pfd_594M);
+		clk_set_rate(&gpu3d_core_clk[0], 594000000);
+
 		/*on mx6dl, 2d core clock sources from 3d shader core clock*/
 		clk_set_parent(&gpu2d_core_clk[0], &gpu3d_shader_clk);
 		/* on mx6dl gpu3d_axi_clk source from mmdc0 directly */
@@ -5214,12 +5394,22 @@ int __init mx6_clocks_init(unsigned long ckil, unsigned long osc,
 		/* on mx6dl gpu2d_axi_clk source from mmdc0 directly */
 		clk_set_parent(&gpu2d_axi_clk, &mmdc_ch0_axi_clk[0]);
 
-		/* set axi_clk parent to pll3_pfd_540M */
-		clk_set_parent(&axi_clk, &pll3_pfd_540M);
-
-		/* on mx6dl, max ipu clock is 274M */
 		clk_set_parent(&ipu1_clk, &pll3_pfd_540M);
+		/* pxp & epdc */
+		clk_set_parent(&ipu2_clk, &pll2_pfd_400M);
+		clk_set_rate(&ipu2_clk, 200000000);
+		clk_set_parent(&axi_clk, &pll3_pfd_540M);
+	} else if (cpu_is_mx6q()) {
+		clk_set_parent(&gpu3d_core_clk[0], &mmdc_ch0_axi_clk[0]);
+		clk_set_rate(&gpu3d_core_clk[0], 528000000);
+		clk_set_parent(&ipu2_clk, &mmdc_ch0_axi_clk[0]);
+		clk_set_parent(&ipu1_clk, &mmdc_ch0_axi_clk[0]);
+		clk_set_parent(&axi_clk, &periph_clk);
 	}
+
+	/* Need to keep PLL3_PFD_540M enabled until AXI is sourced from it. */
+	clk_enable(&axi_clk);
+
 	if (cpu_is_mx6q())
 		clk_set_parent(&gpu2d_core_clk[0], &pll3_usb_otg_main_clk);
 
@@ -5230,7 +5420,7 @@ int __init mx6_clocks_init(unsigned long ckil, unsigned long osc,
 	clk_set_parent(&clko2_clk, &osc_clk);
 	clk_set_rate(&clko2_clk, 2400000);
 
-	clk_set_parent(&clko_clk, &ipg_clk);
+	clk_set_parent(&clko_clk, &pll4_audio_main_clk);
 	/*
 	 * FIXME: asrc needs to use asrc_serial(spdif1) clock to do sample
 	 * rate convertion and this clock frequency can not be too high, set
@@ -5258,7 +5448,11 @@ int __init mx6_clocks_init(unsigned long ckil, unsigned long osc,
 			     3 << MXC_CCM_CCGRx_CG1_OFFSET |
 			     3 << MXC_CCM_CCGRx_CG0_OFFSET, MXC_CCM_CCGR0);
 	}
-	__raw_writel(3 << MXC_CCM_CCGRx_CG10_OFFSET, MXC_CCM_CCGR1);
+	if (mx6q_revision() == IMX_CHIP_REVISION_1_0)
+		/* If GPT use ipg_perclk, we need to enable gpt serial clock */
+		__raw_writel(3 << MXC_CCM_CCGRx_CG10_OFFSET | 3 << MXC_CCM_CCGRx_CG11_OFFSET, MXC_CCM_CCGR1);
+	else
+		__raw_writel(3 << MXC_CCM_CCGRx_CG10_OFFSET, MXC_CCM_CCGR1);
 	__raw_writel(1 << MXC_CCM_CCGRx_CG12_OFFSET |
 		     1 << MXC_CCM_CCGRx_CG11_OFFSET |
 		     3 << MXC_CCM_CCGRx_CG10_OFFSET |
@@ -5276,23 +5470,23 @@ int __init mx6_clocks_init(unsigned long ckil, unsigned long osc,
 
 	__raw_writel(0, MXC_CCM_CCGR6);
 
-	/* Lower the ipg_perclk frequency to 6MHz. */
-	clk_set_rate(&ipg_perclk, 6000000);
-
-	/* Set pll2_pfd_352M frequency to 528M for gpu2d core clock */
-	clk_set_rate(&pll2_pfd_352M, 528000000);
-
 	/* S/PDIF */
 	clk_set_parent(&spdif0_clk[0], &pll3_pfd_454M);
 
-	if (mx6q_revision() == IMX_CHIP_REVISION_1_0) {
-		gpt_clk[0].parent = &ipg_perclk;
-		gpt_clk[0].get_rate = NULL;
-	} else {
-		/* Here we use OSC 24M as GPT's clock source, no need to
-		enable gpt serial clock*/
-		gpt_clk[0].secondary = NULL;
-	}
+	/* MLB150 SYS Clock */
+	/*
+	 * In Rigel validatioin, the MLB sys_clock isn't using the
+	 * right frequency after boot.
+	 * In arik, the register CBCMR controls gpu2d clock, not mlb clock,
+	 * mlb is sourced from axi clock.
+	 * But In rigel, the axi clock is lower than in mx6q, so mlb need to
+	 * find a new clock root.
+	 * The gpu2d clock is the root of mlb clock in rigel.
+	 * Thus we need to add below code in mx6dl.
+	 * */
+	if (cpu_is_mx6dl())
+		clk_set_parent(&mlb150_clk, &pll3_sw_clk);
+
 
 	if (cpu_is_mx6dl()) {
 		/* pxp & epdc */
@@ -5303,9 +5497,6 @@ int __init mx6_clocks_init(unsigned long ckil, unsigned long osc,
 		else
 			clk_set_parent(&ipu2_di_clk[1], &pll3_pfd_540M);
 	}
-
-	base = ioremap(GPT_BASE_ADDR, SZ_4K);
-	mxc_timer_init(&gpt_clk[0], base, MXC_INT_GPT);
 
 	lp_high_freq = 0;
 	lp_med_freq = 0;

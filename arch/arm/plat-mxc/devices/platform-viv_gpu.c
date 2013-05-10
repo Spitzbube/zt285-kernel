@@ -22,7 +22,19 @@
 #include <mach/devices-common.h>
 
 #ifdef CONFIG_ARCH_MX6
+#ifdef CONFIG_SOC_IMX6SL
 const struct imx_viv_gpu_data imx6_gpu_data __initconst = {
+	.phys_baseaddr = MX6SL_MMDC0_ARB_BASE_ADDR,
+	.iobase_3d = 0,
+	.irq_3d = -1,
+	.iobase_2d = MX6SL_GPU_2D_ARB_BASE_ADDR,
+	.irq_2d = MXC_INT_GPU2D_IRQ,
+	.iobase_vg = OPENVG_ARB_BASE_ADDR,
+	.irq_vg = MXC_INT_OPENVG_XAQ2,
+};
+#else
+const struct imx_viv_gpu_data imx6_gpu_data __initconst = {
+	.phys_baseaddr = 0,
 	.iobase_3d = GPU_3D_ARB_BASE_ADDR,
 	.irq_3d = MXC_INT_GPU3D_IRQ,
 	.iobase_2d = GPU_2D_ARB_BASE_ADDR,
@@ -30,6 +42,7 @@ const struct imx_viv_gpu_data imx6_gpu_data __initconst = {
 	.iobase_vg = OPENVG_ARB_BASE_ADDR,
 	.irq_vg = MXC_INT_OPENVG_XAQ2,
 };
+#endif
 #endif
 
 struct platform_device *__init imx_add_viv_gpu(
@@ -39,6 +52,12 @@ struct platform_device *__init imx_add_viv_gpu(
 	u32 res_count = 0;
 	struct resource res[] = {
 		{
+			.name = "phys_baseaddr",
+			.start = data->phys_baseaddr,
+			.end = data->phys_baseaddr,
+			.flags = IORESOURCE_MEM,
+		}, {
+
 			.name = "iobase_3d",
 			.start = data->iobase_3d,
 			.end = data->iobase_3d + SZ_16K - 1,
@@ -71,7 +90,7 @@ struct platform_device *__init imx_add_viv_gpu(
 		},
 	};
 
-	if (cpu_is_mx6q())
+	if (cpu_is_mx6q() || cpu_is_mx6sl())
 		res_count = ARRAY_SIZE(res);
 	else if (cpu_is_mx6dl())
 		/* No openVG on i.mx6 Solo/DL */

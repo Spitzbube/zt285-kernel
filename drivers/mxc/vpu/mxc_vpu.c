@@ -39,6 +39,12 @@
 #include <linux/workqueue.h>
 #include <linux/sched.h>
 #include <linux/vmalloc.h>
+#include <linux/page-flags.h>
+#include <linux/mm_types.h>
+#include <linux/types.h>
+#include <linux/memblock.h>
+#include <linux/memory.h>
+#include <asm/page.h>
 #include <asm/sizes.h>
 #include <mach/clock.h>
 #include <mach/hardware.h>
@@ -84,6 +90,7 @@ static struct vpu_mem_desc vshare_mem = { 0 };
 static void __iomem *vpu_base;
 static int vpu_ipi_irq;
 static u32 phy_vpu_base_addr;
+static phys_addr_t top_address_DRAM;
 static struct mxc_vpu_platform_data *vpu_plat;
 
 /* IRAM setting */
@@ -173,7 +180,6 @@ static inline void vpu_worker_callback(struct work_struct *w)
 	 * codec is done.
 	 */
 	if (codec_done) {
-		clk_disable(vpu_clk);
 		codec_done = 0;
 	}
 
@@ -216,6 +222,21 @@ static irqreturn_t vpu_jpu_irq_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 #endif
+
+/*!
+ * @brief check phy memory prepare to pass to vpu is valid or not, we
+ * already address some issue that if pass a wrong address to vpu
+ * (like virtual address), system will hang.
+ *
+ * @return true return is a valid phy memory address, false return not.
+ */
+bool vpu_is_valid_phy_memory(u32 paddr)
+{
+	if (paddr > top_address_DRAM)
+		return false;
+
+	return true;
+}
 
 /*!
  * @brief open function for vpu file operation
@@ -466,9 +487,35 @@ static long vpu_ioctl(struct file *filp, u_int cmd,
 		break;
 	case VPU_IOC_PHYMEM_DUMP:
 		break;
+	case VPU_IOC_PHYMEM_CHECK:
+	{
+		struct vpu_mem_desc check_memory;
+		ret = copy_from_user(&check_memory,
+				     (void __user *)arg,
+				     sizeof(struct vpu_mem_desc));
+		if (ret != 0) {
+			printk(KERN_ERR "copy from user failure:%d\n", ret);
+			ret = -EFAULT;
+			break;
+		}
+		ret = vpu_is_valid_phy_memory((u32)check_memory.phy_addr);
+
+		pr_debug("vpu: memory phy:0x%x %s phy memory\n",
+		       check_memory.phy_addr, (ret ? "is" : "isn't"));
+		/* borrow .size to pass back the result. */
+		check_memory.size = ret;
+		ret = copy_to_user((void __user *)arg, &check_memory,
+				   sizeof(struct vpu_mem_desc));
+		if (ret) {
+			ret = -EFAULT;
+			break;
+		}
+		break;
+	}
 	default:
 		{
 			printk(KERN_ERR "No such IOCTL, cmd is %d\n", cmd);
+			ret = -EINVAL;
 			break;
 		}
 	}
@@ -481,6 +528,7 @@ static long vpu_ioctl(struct file *filp, u_int cmd,
  */
 static int vpu_release(struct inode *inode, struct file *filp)
 {
+
 	mutex_lock(&vpu_data.lock);
 	if (open_count > 0 && !(--open_count)) {
 		vpu_free_buffers();
@@ -772,6 +820,10 @@ static int vpu_resume(struct platform_device *pdev)
 
 		clk_enable(vpu_clk);
 
+		/* reset VPU in case of voltage change */
+		if (vpu_plat->reset)
+			vpu_plat->reset();
+
 		pc = READ_REG(BIT_CUR_PC);
 		if (pc) {
 			clk_disable(vpu_clk);
@@ -843,6 +895,10 @@ static int __init vpu_init(void)
 	int ret = platform_driver_register(&mxcvpu_driver);
 
 	init_waitqueue_head(&vpu_queue);
+
+
+	memblock_analyze();
+	top_address_DRAM = memblock_end_of_DRAM_with_reserved();
 
 	return ret;
 }

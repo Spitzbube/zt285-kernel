@@ -753,7 +753,7 @@ static int epdc_choose_next_lut(int rev, int *next_lut)
 				*next_lut = ffz((u32)luts_status);
 				if (*next_lut == -1)
 					*next_lut =
-						ffz((u32)(luts_status >> 32));
+						ffz((u32)(luts_status >> 32)) + 32;
 			}
 		}
 
@@ -847,13 +847,17 @@ static void epdc_set_vertical_timing(u32 vert_start, u32 vert_end,
 	__raw_writel(reg_val, EPDC_TCE_VSCAN);
 }
 
-void epdc_init_settings(struct mxc_epdc_fb_data *fb_data)
+static void epdc_init_settings(struct mxc_epdc_fb_data *fb_data)
 {
 	struct imx_epdc_fb_mode *epdc_mode = fb_data->cur_mode;
 	struct fb_var_screeninfo *screeninfo = &fb_data->epdc_fb_var;
 	u32 reg_val;
 	int num_ce;
 	int i;
+
+	/* Enable clocks to access EPDC regs */
+	clk_enable(fb_data->epdc_clk_axi);
+	clk_enable(fb_data->epdc_clk_pix);
 
 	/* Reset */
 	__raw_writel(EPDC_CTRL_SFTRST, EPDC_CTRL_SET);
@@ -1017,6 +1021,14 @@ void epdc_init_settings(struct mxc_epdc_fb_data *fb_data)
 	reg_val = ((0 << EPDC_GPIO_PWRCTRL_OFFSET) & EPDC_GPIO_PWRCTRL_MASK)
 	    | ((0 << EPDC_GPIO_BDR_OFFSET) & EPDC_GPIO_BDR_MASK);
 	__raw_writel(reg_val, EPDC_GPIO);
+
+	__raw_writel(fb_data->waveform_buffer_phys, EPDC_WVADDR);
+	__raw_writel(fb_data->working_buffer_phys, EPDC_WB_ADDR);
+	__raw_writel(fb_data->working_buffer_phys, EPDC_WB_ADDR_TCE);
+
+	/* Disable clock */
+	clk_disable(fb_data->epdc_clk_axi);
+	clk_disable(fb_data->epdc_clk_pix);
 }
 
 static void epdc_powerup(struct mxc_epdc_fb_data *fb_data)
@@ -1128,8 +1140,6 @@ static void epdc_init_sequence(struct mxc_epdc_fb_data *fb_data)
 {
 	/* Initialize EPDC, passing pointer to EPDC registers */
 	epdc_init_settings(fb_data);
-	__raw_writel(fb_data->waveform_buffer_phys, EPDC_WVADDR);
-	__raw_writel(fb_data->working_buffer_phys, EPDC_WB_ADDR);
 	fb_data->in_init = true;
 	epdc_powerup(fb_data);
 	draw_mode0(fb_data);
@@ -4006,8 +4016,8 @@ static void mxc_epdc_fb_fw_handler(const struct firmware *fw,
 	clk_enable(fb_data->epdc_clk_pix);
 	rounded_pix_clk = clk_round_rate(fb_data->epdc_clk_pix, target_pix_clk);
 
-	if (((rounded_pix_clk >= target_pix_clk + target_pix_clk/200) ||
-		(rounded_pix_clk <= target_pix_clk - target_pix_clk/200))) {
+	if (((rounded_pix_clk >= target_pix_clk + target_pix_clk/100) ||
+		(rounded_pix_clk <= target_pix_clk - target_pix_clk/100))) {
 		/* Can't get close enough without changing parent clk */
 		epdc_parent = clk_get_parent(fb_data->epdc_clk_pix);
 		rounded_parent_rate = clk_round_rate(epdc_parent, target_pix_clk);
@@ -4018,8 +4028,8 @@ static void mxc_epdc_fb_fw_handler(const struct firmware *fw,
 		clk_set_rate(epdc_parent, epdc_pix_rate);
 
 		rounded_pix_clk = clk_round_rate(fb_data->epdc_clk_pix, target_pix_clk);
-		if (((rounded_pix_clk >= target_pix_clk + target_pix_clk/200) ||
-			(rounded_pix_clk <= target_pix_clk - target_pix_clk/200)))
+		if (((rounded_pix_clk >= target_pix_clk + target_pix_clk/100) ||
+			(rounded_pix_clk <= target_pix_clk - target_pix_clk/100)))
 			/* Still can't get a good clock, provide warning */
 			dev_err(fb_data->dev, "Unable to get an accurate EPDC pix clk"
 				"desired = %lu, actual = %lu\n", target_pix_clk,
@@ -4829,6 +4839,7 @@ static int mxc_epdc_fb_suspend(struct platform_device *pdev, pm_message_t state)
 	struct mxc_epdc_fb_data *data = platform_get_drvdata(pdev);
 	int ret;
 
+	data->pwrdown_delay = FB_POWERDOWN_DISABLE;
 	ret = mxc_epdc_fb_blank(FB_BLANK_POWERDOWN, &data->info);
 	if (ret)
 		goto out;
@@ -4842,6 +4853,9 @@ static int mxc_epdc_fb_resume(struct platform_device *pdev)
 	struct mxc_epdc_fb_data *data = platform_get_drvdata(pdev);
 
 	mxc_epdc_fb_blank(FB_BLANK_UNBLANK, &data->info);
+	epdc_init_settings(data);
+	data->updates_active = false;
+
 	return 0;
 }
 #else

@@ -289,7 +289,10 @@ OnError:
             if (kernel->hardware != gcvNULL)
             {
                 /* Turn off the power. */
-                gcmkVERIFY_OK(gckOS_SetGPUPower(kernel->hardware->os, kernel->hardware->core, gcvFALSE, gcvFALSE));
+                gcmkVERIFY_OK(gckOS_SetGPUPower(kernel->hardware->os,
+                                                kernel->hardware->core,
+                                                gcvFALSE,
+                                                gcvFALSE));
                 gcmkVERIFY_OK(gckHARDWARE_Destroy(kernel->hardware));
             }
         }
@@ -461,6 +464,7 @@ _AllocateMemory(
     gctINT loopCount;
     gcuVIDMEM_NODE_PTR node = gcvNULL;
     gctBOOL tileStatusInVirtual;
+    gctBOOL forceContiguous = gcvFALSE;
 
     gcmkHEADER_ARG("Kernel=0x%x *Pool=%d Bytes=%lu Alignment=%lu Type=%d",
                    Kernel, *Pool, Bytes, Alignment, Type);
@@ -471,6 +475,8 @@ _AllocateMemory(
     /* Get initial pool. */
     switch (pool = *Pool)
     {
+    case gcvPOOL_DEFAULT_FORCE_CONTIGUOUS:
+        forceContiguous = gcvTRUE;
     case gcvPOOL_DEFAULT:
     case gcvPOOL_LOCAL:
         pool      = gcvPOOL_LOCAL_INTERNAL;
@@ -484,6 +490,12 @@ _AllocateMemory(
 
     case gcvPOOL_CONTIGUOUS:
         loopCount = (gctINT) gcvPOOL_NUMBER_OF_POOLS;
+        break;
+
+    case gcvPOOL_DEFAULT_FORCE_CONTIGUOUS_CACHEABLE:
+        pool      = gcvPOOL_CONTIGUOUS;
+        loopCount = 1;
+        forceContiguous = gcvTRUE;
         break;
 
     default:
@@ -506,9 +518,19 @@ _AllocateMemory(
         else
         if (pool == gcvPOOL_CONTIGUOUS)
         {
-            /* Create a gcuVIDMEM_NODE for contiguous memory. */
-            status = gckVIDMEM_ConstructVirtual(Kernel, gcvTRUE, Bytes, &node);
-            if (gcmIS_SUCCESS(status))
+#if gcdCONTIGUOUS_SIZE_LIMIT
+            if (Bytes > gcdCONTIGUOUS_SIZE_LIMIT && forceContiguous == gcvFALSE)
+            {
+                status = gcvSTATUS_OUT_OF_MEMORY;
+            }
+            else
+#endif
+            {
+                /* Create a gcuVIDMEM_NODE from contiguous memory. */
+                status = gckVIDMEM_ConstructVirtual(Kernel, gcvTRUE, Bytes, &node);
+            }
+
+            if (gcmIS_SUCCESS(status) || forceContiguous == gcvTRUE)
             {
                 /* Memory allocated. */
                 break;
@@ -1037,7 +1059,7 @@ gckKERNEL_Dispatch(
         break;
 
     case gcvHAL_UNMAP_USER_MEMORY:
-        address = Interface->u.MapUserMemory.address;
+        address = Interface->u.UnmapUserMemory.address;
 
         /* Unmap user memory. */
         gcmkONERROR(
@@ -1169,9 +1191,10 @@ gckKERNEL_Dispatch(
 #if gcdREGISTER_ACCESS_FROM_USER
         {
             gceCHIPPOWERSTATE power;
+
+            gckOS_AcquireMutex(Kernel->os, Kernel->hardware->powerMutex, gcvINFINITE);
             gcmkONERROR(gckHARDWARE_QueryPowerManagementState(Kernel->hardware,
                                                               &power));
-
             if (power == gcvPOWER_ON)
             {
                 /* Read a register. */
@@ -1187,6 +1210,7 @@ gckKERNEL_Dispatch(
                 Interface->u.ReadRegisterData.data = 0;
                 status = gcvSTATUS_CHIP_NOT_READY;
             }
+            gcmkONERROR(gckOS_ReleaseMutex(Kernel->os, Kernel->hardware->powerMutex));
         }
 #else
         /* No access from user land to read registers. */
@@ -1197,12 +1221,29 @@ gckKERNEL_Dispatch(
 
     case gcvHAL_WRITE_REGISTER:
 #if gcdREGISTER_ACCESS_FROM_USER
-        /* Write a register. */
-        gcmkONERROR(
-            gckOS_WriteRegisterEx(Kernel->os,
-                                  Kernel->core,
-                                  Interface->u.WriteRegisterData.address,
-                                  Interface->u.WriteRegisterData.data));
+        {
+            gceCHIPPOWERSTATE power;
+
+            gckOS_AcquireMutex(Kernel->os, Kernel->hardware->powerMutex, gcvINFINITE);
+            gcmkONERROR(gckHARDWARE_QueryPowerManagementState(Kernel->hardware,
+                                                                  &power));
+            if (power == gcvPOWER_ON)
+            {
+                /* Write a register. */
+                gcmkONERROR(
+                    gckOS_WriteRegisterEx(Kernel->os,
+                                          Kernel->core,
+                                          Interface->u.WriteRegisterData.address,
+                                          Interface->u.WriteRegisterData.data));
+            }
+            else
+            {
+                /* Chip is in power-state. */
+                Interface->u.WriteRegisterData.data = 0;
+                status = gcvSTATUS_CHIP_NOT_READY;
+            }
+            gcmkONERROR(gckOS_ReleaseMutex(Kernel->os, Kernel->hardware->powerMutex));
+        }
 #else
         /* No access from user land to write registers. */
         status = gcvSTATUS_NOT_SUPPORTED;
@@ -1764,6 +1805,24 @@ gckKERNEL_Dispatch(
 
         break;
 
+    case gcvHAL_SET_FSCALE_VALUE:
+#if gcdENABLE_FSCALE_VAL_ADJUST
+        status = gckHARDWARE_SetFscaleValue(Kernel->hardware,
+                                            Interface->u.SetFscaleValue.value);
+#else
+        status = gcvSTATUS_NOT_SUPPORTED;
+#endif
+        break;
+    case gcvHAL_GET_FSCALE_VALUE:
+#if gcdENABLE_FSCALE_VAL_ADJUST
+        status = gckHARDWARE_GetFscaleValue(Kernel->hardware,
+                                            &Interface->u.GetFscaleValue.value,
+                                            &Interface->u.GetFscaleValue.minValue,
+                                            &Interface->u.GetFscaleValue.maxValue);
+#else
+        status = gcvSTATUS_NOT_SUPPORTED;
+#endif
+        break;
     default:
         /* Invalid command. */
         gcmkONERROR(gcvSTATUS_INVALID_ARGUMENT);
@@ -2471,6 +2530,7 @@ gckKERNEL_Recovery(
     )
 {
 #if gcdENABLE_RECOVERY
+#define gcvEVENT_MASK 0x3FFFFFFF
     gceSTATUS status;
     gckEVENT eventObj;
     gckHARDWARE hardware;
@@ -2494,17 +2554,17 @@ gckKERNEL_Recovery(
 
     /* Handle all outstanding events now. */
 #if gcdSMP
-    gcmkONERROR(gckOS_AtomSet(Kernel->os, eventObj->pending, ~0U));
+    gcmkONERROR(gckOS_AtomSet(Kernel->os, eventObj->pending, gcvEVENT_MASK));
 #else
-    eventObj->pending = ~0U;
+    eventObj->pending = gcvEVENT_MASK;
 #endif
     gcmkONERROR(gckEVENT_Notify(eventObj, 1));
 
     /* Again in case more events got submitted. */
 #if gcdSMP
-    gcmkONERROR(gckOS_AtomSet(Kernel->os, eventObj->pending, ~0U));
+    gcmkONERROR(gckOS_AtomSet(Kernel->os, eventObj->pending, gcvEVENT_MASK));
 #else
-    eventObj->pending = ~0U;
+    eventObj->pending = gcvEVENT_MASK;
 #endif
     gcmkONERROR(gckEVENT_Notify(eventObj, 2));
 

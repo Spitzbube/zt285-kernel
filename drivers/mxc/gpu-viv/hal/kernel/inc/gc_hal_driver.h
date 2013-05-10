@@ -153,7 +153,11 @@ typedef enum _gceHAL_COMMAND_CODES
 
     /* GPU and event dump */
     gcvHAL_DUMP_GPU_STATE,
-    gcvHAL_DUMP_EVENT
+    gcvHAL_DUMP_EVENT,
+
+    /* FSCALE_VAL. */
+    gcvHAL_SET_FSCALE_VALUE,
+    gcvHAL_GET_FSCALE_VALUE
 }
 gceHAL_COMMAND_CODES;
 
@@ -220,16 +224,19 @@ typedef struct _gcsHAL_QUERY_CHIP_IDENTITY
     gctUINT32                   pixelPipes;
 
     /* Number of instructions. */
-	gctUINT32                   instructionCount;
+    gctUINT32                   instructionCount;
 
     /* Number of constants. */
-	gctUINT32                   numConstants;
+    gctUINT32                   numConstants;
 
-	/* Buffer size */
-	gctUINT32                   bufferSize;
+    /* Buffer size */
+    gctUINT32                   bufferSize;
 
-	/* Number of varyings */
-	gctUINT32                   varyingsCount;
+    /* Number of varyings */
+    gctUINT32                   varyingsCount;
+
+    /* Supertile layout style in hardware */
+    gctUINT32                   superTileMode;
 }
 gcsHAL_QUERY_CHIP_IDENTITY;
 
@@ -893,6 +900,20 @@ typedef struct _gcsHAL_INTERFACE
             IN gceVIDMEM_NODE_SHARED_INFO_TYPE infoType;
         }
         SetSharedInfo;
+
+        struct _gcsHAL_SET_FSCALE_VALUE
+        {
+            IN gctUINT              value;
+        }
+        SetFscaleValue;
+
+        struct _gcsHAL_GET_FSCALE_VALUE
+        {
+            OUT gctUINT             value;
+            OUT gctUINT             minValue;
+            OUT gctUINT             maxValue;
+        }
+        GetFscaleValue;
     }
     u;
 }

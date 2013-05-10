@@ -28,14 +28,14 @@
 #define TTRBIT_MASK 		0xffffc000
 #define TABLE_INDEX_MASK 	0xfff00000
 #define TABLE_ENTRY 		0x00000c02
-#define CACHE_DISABLE_MASK 	0xffffe7fb
+#define CACHE_DISABLE_MASK 	0xfffffffb
 #define MMDC_MAPSR_OFFSET 	0x404
 #define MMDC_MAPSR_PSS 		(1 << 4)
 #define MMDC_MAPSR_PSD 		(1 << 0)
 #define IRAM_SUSPEND_SIZE 	(1 << 12)
 
 /*************************************************************
-mx6q_suspend:
+mx6_suspend:
 
 Suspend the processor (eg, wait for interrupt).
 Set the DDR into Self Refresh
@@ -50,6 +50,123 @@ see define in include/linux/suspend.h
 r1: iram_paddr
 r2: suspend_iram_base
 *************************************************************/
+	.macro	sl_ddr_io_save
+
+	ldr	r4, [r1, #0x30c] /* DRAM_DQM0 */
+	ldr	r5, [r1, #0x310] /* DRAM_DQM1 */
+	ldr	r6, [r1, #0x314] /* DRAM_DQM2 */
+	ldr	r7, [r1, #0x318] /* DRAM_DQM3 */
+	stmfd	r0!, {r4-r7}
+
+	ldr	r4, [r1, #0x344] /* DRAM_SDQS0 */
+	ldr	r5, [r1, #0x348] /* DRAM_SDQS1 */
+	ldr	r6, [r1, #0x34c] /* DRAM_SDQS2 */
+	ldr	r7, [r1, #0x350] /* DRAM_SDQS3 */
+	stmfd	r0!, {r4-r7}
+
+	ldr	r4, [r1, #0x5c4] /* GPR_B0DS */
+	ldr	r5, [r1, #0x5cc] /* GPR_B1DS */
+	ldr	r6, [r1, #0x5d4] /* GPR_B2DS */
+	ldr	r7, [r1, #0x5d8] /* GPR_B3DS */
+	stmfd	r0!, {r4-r7}
+
+	ldr	r4, [r1, #0x300] /* DRAM_CAS */
+	ldr	r5, [r1, #0x31c] /* DRAM_RAS */
+	ldr	r6, [r1, #0x338] /* DRAM_SDCLK_0 */
+	ldr r7, [r1, #0x5ac] /* GPR_ADDS*/
+	stmfd	r0!, {r4-r7}
+
+	ldr	r4, [r1, #0x5b0] /* DDRMODE_CTL */
+	ldr	r5, [r1, #0x5c0] /* DDRMODE */
+	ldr	r6, [r1, #0x33c] /* DRAM_SODT0*/
+	ldr	r7, [r1, #0x340] /* DRAM_SODT1*/
+	stmfd	r0!, {r4-r7}
+
+	ldr	r4, [r1, #0x330] /* DRAM_SDCKE0 */
+	ldr	r5, [r1, #0x334] /* DRAM_SDCKE1 */
+	ldr	r6, [r1, #0x320] /* DRAM_RESET */
+	ldr	r7, [r1, #0x5c8] /* GPR_CTLDS */
+	stmfd	r0!, {r4-r7}
+
+	.endm
+
+	.macro	sl_ddr_io_restore
+
+	ldmea	r0!, {r4-r7}
+	str	r4, [r1, #0x30c] /* DRAM_DQM0 */
+	str	r5, [r1, #0x310] /* DRAM_DQM1 */
+	str	r6, [r1, #0x314] /* DRAM_DQM2 */
+	str	r7, [r1, #0x318] /* DRAM_DQM3 */
+
+	ldmea	r0!, {r4-r7}
+	str	r4, [r1, #0x344] /* DRAM_SDQS0 */
+	str	r5, [r1, #0x348] /* DRAM_SDQS1 */
+	str	r6, [r1, #0x34c] /* DRAM_SDQS2 */
+	str	r7, [r1, #0x350] /* DRAM_SDQS3 */
+
+	ldmea	r0!, {r4-r7}
+	str	r4, [r1, #0x5c4] /* GPR_B0DS */
+	str	r5, [r1, #0x5cc] /* GPR_B1DS */
+	str r6, [r1, #0x5d4] /* GPR_B2DS */
+	str r7, [r1, #0x5d8] /* GPR_B3DS */
+
+	ldmea	r0!, {r4-r7}
+	str	r4, [r1, #0x300] /* DRAM_CAS */
+	str	r5, [r1, #0x31c] /* DRAM_RAS */
+	str	r6, [r1, #0x338] /* DRAM_SDCLK_0 */
+	str r7, [r1, #0x5ac] /* GPR_ADDS*/
+
+	ldmea	r0!, {r4-r7}
+	str	r4, [r1, #0x5b0] /* DDRMODE_CTL */
+	str	r5, [r1, #0x5c0] /* DDRMODE */
+	str	r6, [r1, #0x33c] /* DRAM_SODT0*/
+	str	r7, [r1, #0x340] /* DRAM_SODT1*/
+
+	ldmea	r0!, {r4-r7}
+	str	r4, [r1, #0x330] /* DRAM_SDCKE0 */
+	str	r5, [r1, #0x334] /* DRAM_SDCKE1 */
+	str	r6, [r1, #0x320] /* DRAM_RESET */
+	str	r7, [r1, #0x5c8] /* GPR_CTLDS */
+
+	.endm
+
+	.macro	sl_ddr_io_set_lpm
+
+	mov	r0, #0
+	str	r0, [r1, #0x30c] /* DRAM_DQM0 */
+	str	r0, [r1, #0x310] /* DRAM_DQM1 */
+	str	r0, [r1, #0x314] /* DRAM_DQM2 */
+	str	r0, [r1, #0x318] /* DRAM_DQM3 */
+
+	str	r0, [r1, #0x344] /* DRAM_SDQS0 */
+	str	r0, [r1, #0x348] /* DRAM_SDQS1 */
+	str	r0, [r1, #0x34c] /* DRAM_SDQS2 */
+	str	r0, [r1, #0x350] /* DRAM_SDQS3 */
+
+	str	r0, [r1, #0x5c4] /* GPR_B0DS */
+	str	r0, [r1, #0x5cc] /* GPR_B1DS */
+	str r0, [r1, #0x5d4] /* GPR_B2DS */
+	str r0, [r1, #0x5d8] /* GPR_B3DS */
+
+	str	r0, [r1, #0x300] /* DRAM_CAS */
+	str	r0, [r1, #0x31c] /* DRAM_RAS */
+	str	r0, [r1, #0x338] /* DRAM_SDCLK_0 */
+	str r0, [r1, #0x5ac] /* GPR_ADDS*/
+
+	str	r0, [r1, #0x5b0] /* DDRMODE_CTL */
+	str	r0, [r1, #0x5c0] /* DDRMODE */
+	str	r0, [r1, #0x33c] /* DRAM_SODT0*/
+	str	r0, [r1, #0x340] /* DRAM_SODT1*/
+
+	str	r0, [r1, #0x5c8] /* GPR_CTLDS */
+	mov	r0, #0x80000
+	str	r0, [r1, #0x320] /* DRAM_RESET */
+	mov	r0, #0x1000
+	str	r0, [r1, #0x330] /* DRAM_SDCKE0 */
+	str	r0, [r1, #0x334] /* DRAM_SDCKE1 */
+
+	.endm
+
 	.macro	dl_ddr_io_save
 
 	ldr	r4, [r1, #0x470] /* DRAM_DQM0 */
@@ -424,7 +541,7 @@ Flush and disable L1 dcache
 	 * strongly ordered and would not hit the cache.
 	 */
 	mrc p15, 0, r0, c1, c0, 0
-	bic r0, r0, #(1 << 2)	@ Disable the C bit
+	bic r0, r0, #(1 << 2)		@ Disable the C bit
 	mcr p15, 0, r0, c1, c0, 0
 	isb
 
@@ -455,17 +572,56 @@ Flush and disable L1 dcache
 
 	.endm
 
-ENTRY(mx6q_suspend)
+/******************************************************************
+Clean L2 cache
+******************************************************************/
+	.macro	clean_l2_cache
+	/* Clean L2 cache to write the dirty data into DRAM to make
+	sure the data alignment between DRAM and L2 cache.
+	*/
+#ifdef CONFIG_CACHE_L2X0
+	/* Clean L2 cache here */
+	ldr r1, =L2_BASE_ADDR
+	add r1, r1, #PERIPBASE_VIRT
+	/* Make way to 0xFFFF 16 ways */
+	mov r0, #0x10000
+	sub r0, r0, #0x1
+	/* 0x7BC is L2X0_CLEAN_WAY */
+	mov r4, #0x700
+	orr r4, #0xBC
+	str r0, [r1, r4]
+3:
+	ldr r5, [r1, r4]
+	ands	r5, r5, r0
+	bne 3b
+4:
+	mov r5, #0x0
+	/* 0x730 is L2X0_CACHE_SYNC */
+	mov r4, #0x700
+	orr r4, #0x30
+	str r5, [r1, r4]
+5:
+	ldr r5, [r1, r4]
+	ands	r5, r5, #0x1
+	bne 5b
+#endif
+	.endm
+
+ENTRY(mx6_suspend)
 	stmfd	sp!, {r0-r12}     @ Save registers
 /*************************************************************
 suspend mode entry
 *************************************************************/
+	mov	r12, r3 /* Save CPU type to r12*/
 
 	cmp	r0, #0x1
 	bne	dormant		/* dormant mode */
 
 	/* Need to flush and disable L1 dcache*/
 	flush_disable_l1_dcache
+
+	/* Need to clean L2 dcache*/
+	clean_l2_cache
 
 	/* Disable L2 cache */
 #ifdef CONFIG_CACHE_L2X0
@@ -537,16 +693,46 @@ saved register and context as below:
 	CPSR
 	SCTLR
 ************************************************************/
-ddr_iomux_save:
 	/* save mmdc iomux setting, stack is from the tail of
 	iram_suspend base */
 
 	mov	r0, r2 		/* get suspend_iram_base */
 	add	r0, r0, #IRAM_SUSPEND_SIZE	/* 4K */
+
+	mov	r4, r12			@ Store cpu type
+	stmfd	r0!, {r4}
+
 	ldr	r1, =MX6Q_IOMUXC_BASE_ADDR
 	add	r1, r1, #PERIPBASE_VIRT
 
+	cmp r12, #MXC_CPU_MX6Q
+	bne dl_io_save
 	dq_ddr_io_save
+	b ddr_io_save_done
+dl_io_save:
+	cmp r12, #MXC_CPU_MX6DL
+	bne sl_io_save
+	dl_ddr_io_save
+	b ddr_io_save_done
+sl_io_save:
+	sl_ddr_io_save
+
+ddr_io_save_done:
+
+#ifdef CONFIG_CACHE_L2X0
+	ldr r1, =L2_BASE_ADDR
+	add r1, r1, #PERIPBASE_VIRT
+
+	ldr r4, [r1, #L2X0_CTRL]
+	ldr r5, [r1, #L2X0_AUX_CTRL]
+	ldr r6, [r1, #L2X0_TAG_LATENCY_CTRL]
+	ldr r7, [r1, #L2X0_DATA_LATENCY_CTRL]
+	stmfd	r0!, {r4-r7}
+
+	ldr r4, [r1, #L2X0_PREFETCH_CTRL]
+	ldr r5, [r1, #L2X0_POWER_CTRL]
+	stmfd	r0!, {r4-r5}
+#endif
 
 	mov	r4, sp			@ Store sp
 	mrs	r5, spsr		@ Store spsr
@@ -578,23 +764,11 @@ ddr_iomux_save:
 	mrc	p15, 0, r4, c1, c0, 0	@ SCTLR
 	stmfd	r0!, {r4}
 
-#ifdef CONFIG_CACHE_L2X0
-	ldr r1, =L2_BASE_ADDR
-	add r1, r1, #PERIPBASE_VIRT
-
-	ldr	r4, [r1, #L2X0_CTRL]
-	ldr	r5, [r1, #L2X0_AUX_CTRL]
-	ldr	r6, [r1, #L2X0_TAG_LATENCY_CTRL]
-	ldr	r7, [r1, #L2X0_DATA_LATENCY_CTRL]
-	stmfd	r0!, {r4-r7}
-
-	ldr	r4, [r1, #L2X0_PREFETCH_CTRL]
-	ldr	r5, [r1, #L2X0_POWER_CTRL]
-	stmfd	r0!, {r4-r5}
-#endif
-
 	/* Need to flush and disable L1 dcache*/
 	flush_disable_l1_dcache
+
+	/* Need to clean L2 dcache*/
+	clean_l2_cache
 
 /****************************************************************
 set ddr iomux to low power mode
@@ -614,17 +788,38 @@ refresh:
 	ldr	r1, =MX6Q_IOMUXC_BASE_ADDR
 	add	r1, r1, #PERIPBASE_VIRT
 
+	cmp r12, #MXC_CPU_MX6Q
+	bne dl_io_set_lpm
 	dq_ddr_io_set_lpm
+	b ddr_io_set_lpm_done
+dl_io_set_lpm:
+	cmp r12, #MXC_CPU_MX6DL
+	bne sl_io_set_lpm
+	dl_ddr_io_set_lpm
+	b ddr_io_set_lpm_done
+sl_io_set_lpm:
+	sl_ddr_io_set_lpm
+
+ddr_io_set_lpm_done:
+
 /****************************************************************
 save resume pointer into SRC_GPR1
 ****************************************************************/
-	ldr	r0, =mx6q_suspend
+	ldr	r0, =mx6_suspend
 	ldr	r1, =resume
 	sub	r1, r1, r0
 	add	r3, r3, r1
 	ldr	r1, =SRC_BASE_ADDR
 	add	r1, r1, #PERIPBASE_VIRT
 	str	r3, [r1, #SRC_GPR1_OFFSET]
+#ifdef CONFIG_MX6_INTER_LDO_BYPASS
+	ldr	r1, =0x20c8140
+	add	r1, r1, #PERIPBASE_VIRT
+	ldr	r3, [r1]
+	bic	r3, r3, #0x1f
+	orr	r3, r3, #0x1e
+	str	r3, [r1]
+#endif
 /****************************************************************
 execute a wfi instruction to let SOC go into stop mode.
 ****************************************************************/
@@ -642,10 +837,25 @@ system immediately.
 	mov	r0, r2 		/* get suspend_iram_base */
 	add	r0, r0, #IRAM_SUSPEND_SIZE	/* 4K */
 
+	ldmea	r0!, {r12}	@ get cpu type to make ddr io
+				@ offset right
+
 	ldr	r1, =MX6Q_IOMUXC_BASE_ADDR
 	add	r1, r1, #PERIPBASE_VIRT
 
+	cmp r12, #MXC_CPU_MX6Q
+	bne dl_io_restore
 	dq_ddr_io_restore
+	b ddr_io_restore_done
+dl_io_restore:
+	cmp r12, #MXC_CPU_MX6DL
+	bne sl_io_restore
+	dl_ddr_io_restore
+	b	ddr_io_restore_done
+sl_io_restore:
+	sl_ddr_io_restore
+
+ddr_io_restore_done:
 
 	mrc	p15, 0, r1, c1, c0, 0
 	orr	r1, r1, #(1 << 2)	@ Enable the C bit
@@ -658,21 +868,67 @@ when SOC exit stop mode, arm core restart from here, currently
 are running with MMU off.
 ****************************************************************/
 resume:
+#ifdef CONFIG_MX6_INTER_LDO_BYPASS
+	ldr	r1, =0x20c8140
+	ldr	r3, [r1]
+	orr	r3, r3, #0x1f
+	str	r3, [r1]
+#endif
 	/* Invalidate L1 I-cache first */
 	mov	r1,	#0x0
-	mcr p15, 0, r1, c7, c5, 0 @ Invalidate I-Cache
+	mcr	p15, 0, r1, c7, c5, 0	@ Invalidate I-Cache
+	mcr	p15, 0, r1, c7, c5, 0	@ invalidate Icache to PoU
+	mcr	p15, 0, r1, c7, c5, 6	@ invalidate branch predictor
+	mov	r1, #0x1800
+	mcr	p15, 0, r1, c1, c0, 0	@ enable the Icache and branch prediction
+	isb							@ as soon as possible
+
+	/* Need to invalidate L1 dcache */
+	invalidate_l1_dcache
+
 	ldr	r0, =SRC_BASE_ADDR
 	str	r1, [r0, #SRC_GPR1_OFFSET] /* clear SRC_GPR1 */
 	ldr	r0, [r0, #SRC_GPR2_OFFSET]
 
-	ldr	r1, =MX6Q_IOMUXC_BASE_ADDR
-	dq_ddr_io_restore
+	ldmea	r0!, {r12}	@ get cpu type
 
-	/* Restore cp15 registers */
+	/* Restore DDR IO */
+	ldr	r1, =MX6Q_IOMUXC_BASE_ADDR
+
+	cmp	r12, #MXC_CPU_MX6Q
+	bne	dl_io_dsm_restore
+	dq_ddr_io_restore
+	b ddr_io_restore_dsm_done
+dl_io_dsm_restore:
+	cmp	r12, #MXC_CPU_MX6DL
+	bne	sl_io_dsm_restore
+	dl_ddr_io_restore
+	b	ddr_io_restore_dsm_done
+sl_io_dsm_restore:
+	sl_ddr_io_restore
+
+ddr_io_restore_dsm_done:
+
+#ifdef CONFIG_CACHE_L2X0
+	ldr r2, =L2_BASE_ADDR
+	ldmea	r0!, {r4-r7}
+	/* L2 will be enabled after L1 is enabled */
+	mov r4, #0x0
+	str r4, [r2, #L2X0_CTRL]
+	str r5, [r2, #L2X0_AUX_CTRL]
+	str r6, [r2, #L2X0_TAG_LATENCY_CTRL]
+	str r7, [r2, #L2X0_DATA_LATENCY_CTRL]
+
+	ldmea	r0!, {r4-r5}
+	str r4, [r2, #L2X0_PREFETCH_CTRL]
+	str r5, [r2, #L2X0_POWER_CTRL]
+#endif
+
+	/* Restore cp15 registers and cpu type */
 	ldmea	r0!, {r4-r6}
-	mov	sp, r4
-	msr	spsr_cxsf, r5		@ Restore spsr
-	mov	lr, r6			@ Restore lr
+	mov sp, r4			@ Restore sp
+	msr spsr_cxsf, r5		@ Restore spsr
+	mov lr, r6			@ Restore lr
 
 	/* c1 and c2 registers */
 	ldmea	r0!, {r4-r7}
@@ -731,7 +987,6 @@ use_ttbr0:
 
 	mov	r1, #0
 	mcr	p15, 0, r1, c7, c5, 4	@ Flush prefetch buffer
-	mcr	p15, 0, r1, c7, c5, 6	@ Invalidate BTB
 	mcr	p15, 0, r1, c8, c5, 0	@ Invalidate ITLB
 	mcr	p15, 0, r1, c8, c6, 0	@ Invalidate DTLB
 
@@ -749,26 +1004,6 @@ use_ttbr0:
 	ldr	r1, =mmu_on_label
 	bx	r1
 mmu_on_label:
-
-#ifdef CONFIG_CACHE_L2X0
-	ldr r2, =L2_BASE_ADDR
-	add r2, r2, #PERIPBASE_VIRT
-
-	ldmea	r0!, {r4-r7}
-	/* L2 will be enabled after L1 is enabled */
-	mov r4, #0x0
-	str r4, [r2, #L2X0_CTRL]
-	str r5, [r2, #L2X0_AUX_CTRL]
-	str r6, [r2, #L2X0_TAG_LATENCY_CTRL]
-	str r7, [r2, #L2X0_DATA_LATENCY_CTRL]
-
-	ldmea	r0!, {r4-r5}
-	str r4, [r2, #L2X0_PREFETCH_CTRL]
-	str r5, [r2, #L2X0_POWER_CTRL]
-#endif
-
-	/* Need to invalidate L1 dcache */
-	invalidate_l1_dcache
 
 /************************************************************
 restore control register to enable cache
@@ -798,7 +1033,15 @@ restore control register to enable cache
 	 * enabling MMU.
 	 */
 	ldr	r4, =PAGE_OFFSET
+
+	cmp r12, #MXC_CPU_MX6SL
+	bne dq_dl_phy_offset
+	ldr	r5, =MX6SL_PHYS_OFFSET
+	b	get_phy_offset_done
+dq_dl_phy_offset:
 	ldr	r5, =MX6_PHYS_OFFSET
+get_phy_offset_done:
+
 	sub	r4, r4, r5
 	add	r4, r4, r10
 	str	r9, [r4]
@@ -825,8 +1068,7 @@ out:
 	ldmfd	sp!, {r0-r12}
 	mov	pc, lr
 
-	.equ	va2pa_offset, (PAGE_OFFSET - MX6_PHYS_OFFSET)
-	.type	mx6q_do_suspend, #object
-ENTRY(mx6q_do_suspend)
-	.word	mx6q_suspend
-	.size	mx6q_suspend, . - mx6q_suspend
+	.type	mx6_do_suspend, #object
+ENTRY(mx6_do_suspend)
+	.word	mx6_suspend
+	.size	mx6_suspend, . - mx6_suspend

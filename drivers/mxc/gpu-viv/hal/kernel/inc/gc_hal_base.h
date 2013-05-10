@@ -28,7 +28,6 @@
 #include "gc_hal_types.h"
 
 #include "gc_hal_dump.h"
-#include "gc_hal_md5.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -96,6 +95,8 @@ typedef struct _gcsPLS
     /* EGL-specific process-wide objects. */
     gctPOINTER                  eglDisplayInfo;
     gctPOINTER                  eglSurfaceInfo;
+    gceSURF_FORMAT              eglConfigFormat;
+
 }
 gcsPLS;
 
@@ -129,6 +130,7 @@ typedef struct _gcsTLS
 	gco3D						engine3D;
 #endif
 	gco2D						engine2D;
+    gctBOOL                     copied;
 }
 gcsTLS;
 
@@ -139,7 +141,8 @@ gcsTLS;
 typedef enum _gcePLS_VALUE
 {
   gcePLS_VALUE_EGL_DISPLAY_INFO,
-  gcePLS_VALUE_EGL_SURFACE_INFO
+  gcePLS_VALUE_EGL_SURFACE_INFO,
+  gcePLS_VALUE_EGL_CONFIG_FORMAT_INFO,
 }
 gcePLS_VALUE;
 
@@ -156,6 +159,8 @@ typedef enum _gcePOOL
     gcvPOOL_VIRTUAL,
     gcvPOOL_USER,
     gcvPOOL_CONTIGUOUS,
+    gcvPOOL_DEFAULT_FORCE_CONTIGUOUS,
+    gcvPOOL_DEFAULT_FORCE_CONTIGUOUS_CACHEABLE,
 
     gcvPOOL_NUMBER_OF_POOLS
 }
@@ -341,6 +346,18 @@ gceSTATUS
 gcoHAL_Get2DEngine(
     IN gcoHAL Hal,
     OUT gco2D * Engine
+    );
+
+gceSTATUS
+gcoHAL_SetFscaleValue(
+    IN gctUINT FscaleValue
+    );
+
+gceSTATUS
+gcoHAL_GetFscaleValue(
+    OUT gctUINT * FscaleValue,
+    OUT gctUINT * MinFscaleValue,
+    OUT gctUINT * MaxFscaleValue
     );
 
 #ifndef VIVANTE_NO_3D
@@ -619,6 +636,8 @@ gcoHAL_QueryChipFeature(
     IN gceFEATURE   Feature);
 
 #endif
+
+
 /******************************************************************************\
 ********************************** gcoOS Object *********************************
 \******************************************************************************/
@@ -641,6 +660,9 @@ gceSTATUS
 gcoOS_GetTLS(
     OUT gcsTLS_PTR * TLS
     );
+
+    /* Copy the TLS from a source thread. */
+    gceSTATUS gcoOS_CopyTLS(IN gcsTLS_PTR Source);
 
 /* Destroy the objects associated with the current thread. */
 void
@@ -2061,6 +2083,11 @@ gcoDUMP_Delete(
     IN gctUINT32 Address
     );
 
+/* Enable dump or not. */
+gceSTATUS
+gcoDUMP_SetDumpFlag(
+    IN gctBOOL DumpState
+    );
 
 /******************************************************************************\
 ******************************* gcsRECT Structure ******************************
@@ -2418,6 +2445,7 @@ gcoOS_DebugTrace(
 #define gcvZONE_API_DFB         (7 << 28)
 #define gcvZONE_API_GDI         (8 << 28)
 #define gcvZONE_API_D3D         (9 << 28)
+#define gcvZONE_API_ES30        (10 << 28)
 
 
 #define gcmZONE_GET_API(zone)   ((zone) >> 28)
@@ -2788,9 +2816,10 @@ gcoOS_ProfileDB(
 #   define gcmkFOOTER_ARG               __dummy_kfooter_arg
 #endif
 
-#define gcmOPT_VALUE(ptr)           (((ptr) == gcvNULL) ? 0 : *(ptr))
-#define gcmOPT_POINTER(ptr)         (((ptr) == gcvNULL) ? gcvNULL : *(ptr))
-#define gcmOPT_STRING(ptr)          (((ptr) == gcvNULL) ? "(nil)" : (ptr))
+#define gcmOPT_VALUE(ptr)               (((ptr) == gcvNULL) ? 0 : *(ptr))
+#define gcmOPT_VALUE_INDEX(ptr, index)  (((ptr) == gcvNULL) ? 0 : ptr[index])
+#define gcmOPT_POINTER(ptr)             (((ptr) == gcvNULL) ? gcvNULL : *(ptr))
+#define gcmOPT_STRING(ptr)              (((ptr) == gcvNULL) ? "(nil)" : (ptr))
 
 void
 gckOS_Print(
@@ -3047,12 +3076,8 @@ gcfDumpBuffer(
 **
 **      ...         Optional arguments.
 */
+gceSTATUS gcfDumpApi(IN gctCONST_STRING String, ...);
 #if gcdDUMP_API
-    gceSTATUS
-    gcfDumpApi(
-        IN gctCONST_STRING String,
-        ...
-        );
 #   define gcmDUMP_API           gcfDumpApi
 #elif gcdHAS_ELLIPSES
 #   define gcmDUMP_API(...)
@@ -3078,12 +3103,8 @@ gcfDumpBuffer(
 **      gctUINT32_PTR   Pointer to array.
 **      gctUINT32       Size.
 */
+gceSTATUS gcfDumpArray(IN gctCONST_POINTER Data, IN gctUINT32 Size);
 #if gcdDUMP_API
-    gceSTATUS
-    gcfDumpArray(
-        IN gctCONST_POINTER Data,
-        IN gctUINT32 Size
-    );
 #   define gcmDUMP_API_ARRAY        gcfDumpArray
 #elif gcdHAS_ELLIPSES
 #   define gcmDUMP_API_ARRAY(...)
@@ -3109,12 +3130,8 @@ gcfDumpBuffer(
 **      gctUINT32_PTR   Pointer to array.
 **      gctUINT32       Termination.
 */
+gceSTATUS gcfDumpArrayToken(IN gctCONST_POINTER Data, IN gctUINT32 Termination);
 #if gcdDUMP_API
-    gceSTATUS
-    gcfDumpArrayToken(
-        IN gctCONST_POINTER Data,
-        IN gctUINT32 Termination
-    );
 #   define gcmDUMP_API_ARRAY_TOKEN  gcfDumpArrayToken
 #elif gcdHAS_ELLIPSES
 #   define gcmDUMP_API_ARRAY_TOKEN(...)
@@ -3140,12 +3157,8 @@ gcfDumpBuffer(
 **      gctCONST_POINTER    Pointer to array.
 **      gctSIZE_T           Size.
 */
+gceSTATUS gcfDumpApiData(IN gctCONST_POINTER Data, IN gctSIZE_T Size);
 #if gcdDUMP_API
-    gceSTATUS
-    gcfDumpApiData(
-        IN gctCONST_POINTER Data,
-        IN gctSIZE_T Size
-    );
 #   define gcmDUMP_API_DATA         gcfDumpApiData
 #elif gcdHAS_ELLIPSES
 #   define gcmDUMP_API_DATA(...)

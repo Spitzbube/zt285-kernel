@@ -79,10 +79,6 @@ static enum clock_event_mode clockevent_mode = CLOCK_EVT_MODE_UNUSED;
 
 static void __iomem *timer_base;
 
-#ifdef CONFIG_ARCH_MX6
-extern int mx6q_revision(void);
-#endif
-
 static inline void gpt_irq_disable(void)
 {
 	unsigned int tmp;
@@ -298,34 +294,6 @@ static int __init mxc_clockevent_init(struct clk *timer_clk)
 	return 0;
 }
 
-#ifdef CONFIG_ARCH_MX6
-unsigned long mx6_timer_rate()
-{
-	struct clk *osc_clk = clk_get(NULL, "osc");
-	u32 parent_rate = clk_get_rate(osc_clk);
-
-	u32 reg = __raw_readl(timer_base + MXC_TCTL);
-	u32 div;
-
-	clk_put(osc_clk);
-
-	if ((reg & V2_TCTL_CLK_OSC_DIV8) == V2_TCTL_CLK_OSC_DIV8) {
-		if (cpu_is_mx6q())
-			/* For MX6Q, only options are 24MHz or 24MHz/8*/
-			return parent_rate / 8;
-		else {
-			/* For MX6DLS and MX6Solo, the rate is based on the
-			  * divider value set in prescalar register. */
-			div = __raw_readl(timer_base + MXC_TPRER);
-			div = (div >> V2_TPRER_PRE24M_OFFSET) &
-					V2_TPRER_PRE24M_MASK;
-			return parent_rate / (div + 1);
-		}
-	}
-	return 0;
-}
-#endif
-
 void __init mxc_timer_init(struct clk *timer_clk, void __iomem *base, int irq)
 {
 	uint32_t tctl_val;
@@ -343,7 +311,7 @@ void __init mxc_timer_init(struct clk *timer_clk, void __iomem *base, int irq)
 	__raw_writel(0, timer_base + MXC_TPRER); /* see datasheet note */
 
 	if (timer_is_v2()) {
-		if (cpu_is_mx5() ||
+		if (cpu_is_mx5() || cpu_is_mx6sl() ||
 			mx6q_revision() == IMX_CHIP_REVISION_1_0)
 			tctl_val = V2_TCTL_CLK_PER | V2_TCTL_FRR |
 						V2_TCTL_WAITEN | MXC_TCTL_TEN;

@@ -6,7 +6,7 @@
  * published by the Free Software Foundation.
  *
  * Derived from pxa PWM driver by eric miao <eric.miao@marvell.com>
- * Copyright 2009-2011 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright 2009-2012 Freescale Semiconductor, Inc. All Rights Reserved.
  */
 
 #include <linux/module.h>
@@ -34,8 +34,12 @@
 #define MX3_PWMSAR                0x0C    /* PWM Sample Register */
 #define MX3_PWMPR                 0x10    /* PWM Period Register */
 #define MX3_PWMCR_PRESCALER(x)    (((x - 1) & 0xFFF) << 4)
+#define MX3_PWMCR_DOZEEN                (1 << 24)
+#define MX3_PWMCR_WAITEN                (1 << 23)
+#define MX3_PWMCR_DBGEN			(1 << 22)
 #define MX3_PWMCR_CLKSRC_IPG_HIGH (2 << 16)
 #define MX3_PWMCR_CLKSRC_IPG      (1 << 16)
+#define MX3_PWMCR_SWR             (1 << 3)
 #define MX3_PWMCR_EN              (1 << 0)
 
 #define MX3_PWMCR_STOPEN		(1 << 25)
@@ -90,6 +94,15 @@ int pwm_config(struct pwm_device *pwm, int duty_ns, int period_ns)
 		c = (unsigned long long)(period_cycles + 2) * duty_ns;
 		do_div(c, period_ns);
 		duty_cycles = c;
+
+		/*
+		 * according to imx pwm RM, the real period value should be
+		 * PERIOD value in PWMPR plus 2.
+		 */
+		if (period_cycles > 2)
+			period_cycles -= 2;
+		else
+			period_cycles = 0;
 
 		writel(duty_cycles, pwm->mmio_base + MX3_PWMSAR);
 		writel(period_cycles, pwm->mmio_base + MX3_PWMPR);
@@ -162,7 +175,9 @@ void pwm_disable(struct pwm_device *pwm)
 	if (pwm->disable_pwm_pad)
 		pwm->disable_pwm_pad();
 
-	writel(0, pwm->mmio_base + MX3_PWMCR);
+	writel(MX3_PWMCR_SWR, pwm->mmio_base + MX3_PWMCR);
+	while (readl(pwm->mmio_base + MX3_PWMCR) & MX3_PWMCR_SWR)
+		;
 
 	if (pwm->clk_enabled) {
 		clk_disable(pwm->clk);

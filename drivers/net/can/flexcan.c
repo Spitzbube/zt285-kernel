@@ -195,6 +195,7 @@ struct flexcan_priv {
 	struct clk *clk;
 	struct flexcan_platform_data *pdata;
 	enum flexcan_ip_version version;
+	int id;
 };
 
 static struct can_bittiming_const flexcan_bittiming_const = {
@@ -223,6 +224,26 @@ static inline int flexcan_has_and_handle_berr(const struct flexcan_priv *priv,
 {
 	return (priv->can.ctrlmode & CAN_CTRLMODE_BERR_REPORTING) &&
 		(reg_esr & FLEXCAN_ESR_ERR_BUS);
+}
+
+static inline void flexcan_enter_stop(struct flexcan_priv *priv)
+{
+	/* enable stop request for wakeup */
+	if (priv->version >= FLEXCAN_VER_10_0_12)
+		/* CAN1/CAN2_STOP_REQ bit 28/29 in group 13 */
+		mxc_iomux_set_gpr_register(13, 28 + priv->id, 1, 1);
+
+	udelay(10);
+}
+
+static inline void flexcan_exit_stop(struct flexcan_priv *priv)
+{
+	/* remove stop request */
+	if (priv->version >= FLEXCAN_VER_10_0_12)
+		/* CAN1/CAN2_STOP_REQ bit 28/29 in group 13 */
+		mxc_iomux_set_gpr_register(13, 28 + priv->id, 1, 0);
+
+	udelay(10);
 }
 
 static inline void flexcan_chip_enable(struct flexcan_priv *priv)
@@ -578,9 +599,7 @@ static irqreturn_t flexcan_irq(int irq, void *dev_id)
 	writel(FLEXCAN_ESR_ERR_INT, &regs->esr);	/* ACK err IRQ */
 
 	if (reg_esr & FLEXCAN_ESR_WAK_INT) {
-		/* first clear stop request then wakeup irq status */
-		if (priv->version >= FLEXCAN_VER_10_0_12)
-			mxc_iomux_set_gpr_register(13, 28, 1, 0);
+		flexcan_exit_stop(priv);
 		writel(FLEXCAN_ESR_WAK_INT, &regs->esr);
 	}
 
@@ -960,6 +979,9 @@ static int __devinit flexcan_probe(struct platform_device *pdev)
 	resource_size_t mem_size;
 	int err, irq;
 
+	if (pdev->id < 0)
+		return -ENODEV;
+
 	clk = clk_get(&pdev->dev, NULL);
 	if (IS_ERR(clk)) {
 		dev_err(&pdev->dev, "no clock defined\n");
@@ -1007,6 +1029,7 @@ static int __devinit flexcan_probe(struct platform_device *pdev)
 	priv->base = base;
 	priv->dev = dev;
 	priv->clk = clk;
+	priv->id = pdev->id;
 	priv->pdata = pdev->dev.platform_data;
 	priv->version = pdev->id_entry->driver_data;
 
@@ -1068,17 +1091,16 @@ static int flexcan_suspend(struct platform_device *pdev, pm_message_t state)
 	if (netif_running(dev)) {
 		netif_stop_queue(dev);
 		netif_device_detach(dev);
+
+		/* enter stop mode if device is up */
+		flexcan_enter_stop(priv);
+
+		ret = irq_set_irq_wake(dev->irq, 1);
+		if (ret)
+			return ret;
 	}
 
 	priv->can.state = CAN_STATE_SLEEPING;
-
-	/* enable stop request for wakeup */
-	if (priv->version >= FLEXCAN_VER_10_0_12)
-		mxc_iomux_set_gpr_register(13, 28, 1, 1);
-
-	ret = irq_set_irq_wake(dev->irq, 1);
-	if (ret)
-		return ret;
 
 	return 0;
 }
@@ -1089,13 +1111,15 @@ static int flexcan_resume(struct platform_device *pdev)
 	struct flexcan_priv *priv = netdev_priv(dev);
 	int ret;
 
-	ret = irq_set_irq_wake(dev->irq, 0);
-	if (ret)
-		return ret;
-
 	priv->can.state = CAN_STATE_ERROR_ACTIVE;
 
 	if (netif_running(dev)) {
+		ret = irq_set_irq_wake(dev->irq, 0);
+		if (ret)
+			return ret;
+
+		flexcan_exit_stop(priv);
+
 		netif_device_attach(dev);
 		netif_start_queue(dev);
 	}

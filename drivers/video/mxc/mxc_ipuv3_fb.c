@@ -47,6 +47,7 @@
 #include <linux/uaccess.h>
 #include <linux/fsl_devices.h>
 #include <linux/earlysuspend.h>
+#include <linux/workqueue.h>
 #include <asm/mach-types.h>
 #include <mach/ipu-v3.h>
 #include "mxc_dispdrv.h"
@@ -62,6 +63,8 @@
  * Structure containing the MXC specific framebuffer information.
  */
 struct mxcfb_info {
+	spinlock_t lock;
+	struct fb_info *fbi;
 	int default_bpp;
 	int cur_blank;
 	int next_blank;
@@ -79,6 +82,7 @@ struct mxcfb_info {
 	uint32_t alpha_mem_len;
 	uint32_t ipu_ch_irq;
 	uint32_t ipu_ch_nf_irq;
+	uint32_t ipu_vsync_pre_irq;
 	uint32_t ipu_alp_ch_irq;
 	uint32_t cur_ipu_buf;
 	uint32_t cur_ipu_alpha_buf;
@@ -86,14 +90,25 @@ struct mxcfb_info {
 	u32 pseudo_palette[16];
 
 	bool mode_found;
-	struct semaphore flip_sem;
-	struct semaphore alpha_flip_sem;
+	struct completion flip_complete;
+	struct completion alpha_flip_complete;
 	struct completion vsync_complete;
 
 	void *ipu;
 	struct fb_info *ovfbi;
 
 	struct mxc_dispdrv_handle *dispdrv;
+
+	struct fb_var_screeninfo cur_var;
+
+	int vsync_pre_report_active;
+	ktime_t vsync_pre_timestamp;
+	struct workqueue_struct *vsync_pre_queue;
+	struct work_struct vsync_pre_work;
+
+#ifdef CONFIG_HAS_EARLYSUSPEND
+	struct early_suspend fbdrv_earlysuspend;
+#endif
 };
 
 struct mxcfb_alloc_list {
@@ -112,6 +127,11 @@ enum {
 
 static bool g_dp_in_use[2];
 LIST_HEAD(fb_alloc_list);
+
+#ifdef CONFIG_HAS_EARLYSUSPEND
+static void mxcfb_early_suspend(struct early_suspend *h);
+static void mxcfb_later_resume(struct early_suspend *h);
+#endif
 
 static uint32_t bpp_to_pixfmt(struct fb_info *fbi)
 {
@@ -155,6 +175,7 @@ static struct fb_info *found_registered_fb(ipu_channel_t ipu_ch, int ipu_id)
 
 static irqreturn_t mxcfb_irq_handler(int irq, void *dev_id);
 static irqreturn_t mxcfb_nf_irq_handler(int irq, void *dev_id);
+static irqreturn_t mxcfb_vsync_pre_irq_handler(int irq, void *dev_id);
 static int mxcfb_blank(int blank, struct fb_info *info);
 static int mxcfb_map_video_memory(struct fb_info *fbi);
 static int mxcfb_unmap_video_memory(struct fb_info *fbi);
@@ -223,6 +244,7 @@ static int _setup_disp_channel2(struct fb_info *fbi)
 	case IPU_PIX_FMT_YUV422P:
 	case IPU_PIX_FMT_YVU422P:
 	case IPU_PIX_FMT_YUV420P:
+	case IPU_PIX_FMT_YUV444P:
 		fb_stride = fbi->var.xres_virtual;
 		break;
 	default:
@@ -246,10 +268,19 @@ static int _setup_disp_channel2(struct fb_info *fbi)
 	base += fr_yoff * fb_stride + fr_xoff;
 
 	mxc_fbi->cur_ipu_buf = 2;
-	sema_init(&mxc_fbi->flip_sem, 1);
+	init_completion(&mxc_fbi->flip_complete);
+	/*
+	 * We don't need to wait for vsync at the first time
+	 * we do pan display after fb is initialized, as IPU will
+	 * switch to the newly selected buffer automatically,
+	 * so we call complete() for both mxc_fbi->flip_complete
+	 * and mxc_fbi->alpha_flip_complete.
+	 */
+	complete(&mxc_fbi->flip_complete);
 	if (mxc_fbi->alpha_chan_en) {
 		mxc_fbi->cur_ipu_alpha_buf = 1;
-		sema_init(&mxc_fbi->alpha_flip_sem, 1);
+		init_completion(&mxc_fbi->alpha_flip_complete);
+		complete(&mxc_fbi->alpha_flip_complete);
 	}
 
 	retval = ipu_init_channel_buffer(mxc_fbi->ipu,
@@ -302,6 +333,25 @@ static int _setup_disp_channel2(struct fb_info *fbi)
 	return retval;
 }
 
+static bool mxcfb_need_to_set_par(struct fb_info *fbi)
+{
+	struct mxcfb_info *mxc_fbi = fbi->par;
+
+	if ((fbi->var.activate & FB_ACTIVATE_FORCE) &&
+	    (fbi->var.activate & FB_ACTIVATE_MASK) == FB_ACTIVATE_NOW)
+		return true;
+
+	/*
+	 * Ignore xoffset and yoffset update,
+	 * because pan display handles this case.
+	 */
+	mxc_fbi->cur_var.xoffset = fbi->var.xoffset;
+	mxc_fbi->cur_var.yoffset = fbi->var.yoffset;
+
+	return !!memcmp(&mxc_fbi->cur_var, &fbi->var,
+			sizeof(struct fb_var_screeninfo));
+}
+
 /*
  * Set framebuffer parameters and change the operating mode.
  *
@@ -314,15 +364,40 @@ static int mxcfb_set_par(struct fb_info *fbi)
 	ipu_di_signal_cfg_t sig_cfg;
 	struct mxcfb_info *mxc_fbi = (struct mxcfb_info *)fbi->par;
 
+	int16_t ov_pos_x = 0, ov_pos_y = 0;
+	int ov_pos_ret = 0;
+	struct mxcfb_info *mxc_fbi_fg = NULL;
+	bool ovfbi_enable = false;
+
+	if (mxc_fbi->ovfbi)
+		mxc_fbi_fg = (struct mxcfb_info *)mxc_fbi->ovfbi->par;
+
+	if (mxc_fbi->ovfbi && mxc_fbi_fg)
+		if (mxc_fbi_fg->next_blank == FB_BLANK_UNBLANK)
+			ovfbi_enable = true;
+
+	if (!mxcfb_need_to_set_par(fbi))
+		return 0;
+
 	dev_dbg(fbi->device, "Reconfiguring framebuffer\n");
 
-	if (mxc_fbi->dispdrv && mxc_fbi->dispdrv->drv->setup) {
-		retval = mxc_fbi->dispdrv->drv->setup(mxc_fbi->dispdrv, fbi);
-		if (retval < 0) {
-			dev_err(fbi->device, "setup error, dispdrv:%s.\n",
+	if (fbi->var.xres == 0 || fbi->var.yres == 0)
+		return 0;
+
+	if (ovfbi_enable) {
+		ov_pos_ret = ipu_disp_get_window_pos(
+						mxc_fbi_fg->ipu, mxc_fbi_fg->ipu_ch,
+						&ov_pos_x, &ov_pos_y);
+		if (ov_pos_ret < 0)
+			dev_err(fbi->device, "Get overlay pos failed, dispdrv:%s.\n",
 					mxc_fbi->dispdrv->drv->name);
-			return -EINVAL;
-		}
+
+		ipu_clear_irq(mxc_fbi_fg->ipu, mxc_fbi_fg->ipu_ch_irq);
+		ipu_disable_irq(mxc_fbi_fg->ipu, mxc_fbi_fg->ipu_ch_irq);
+		ipu_clear_irq(mxc_fbi_fg->ipu, mxc_fbi_fg->ipu_ch_nf_irq);
+		ipu_disable_irq(mxc_fbi_fg->ipu, mxc_fbi_fg->ipu_ch_nf_irq);
+		ipu_disable_channel(mxc_fbi_fg->ipu, mxc_fbi_fg->ipu_ch, true);
+		ipu_uninit_channel(mxc_fbi_fg->ipu, mxc_fbi_fg->ipu_ch);
 	}
 
 	ipu_clear_irq(mxc_fbi->ipu, mxc_fbi->ipu_ch_irq);
@@ -391,7 +466,18 @@ static int mxcfb_set_par(struct fb_info *fbi)
 	if (mxc_fbi->next_blank != FB_BLANK_UNBLANK)
 		return retval;
 
+	if (mxc_fbi->dispdrv && mxc_fbi->dispdrv->drv->setup) {
+		retval = mxc_fbi->dispdrv->drv->setup(mxc_fbi->dispdrv, fbi);
+		if (retval < 0) {
+			dev_err(fbi->device, "setup error, dispdrv:%s.\n",
+					mxc_fbi->dispdrv->drv->name);
+			return -EINVAL;
+		}
+	}
+
 	_setup_disp_channel1(fbi);
+	if (ovfbi_enable)
+		_setup_disp_channel1(mxc_fbi->ovfbi);
 
 	if (!mxc_fbi->overlay) {
 		uint32_t out_pixel_fmt;
@@ -449,7 +535,22 @@ static int mxcfb_set_par(struct fb_info *fbi)
 		return retval;
 	}
 
+	if (ovfbi_enable) {
+		if (ov_pos_ret >= 0)
+			ipu_disp_set_window_pos(
+					mxc_fbi_fg->ipu, mxc_fbi_fg->ipu_ch,
+					ov_pos_x, ov_pos_y);
+		retval = _setup_disp_channel2(mxc_fbi->ovfbi);
+		if (retval) {
+			ipu_uninit_channel(mxc_fbi_fg->ipu, mxc_fbi_fg->ipu_ch);
+			ipu_uninit_channel(mxc_fbi->ipu, mxc_fbi->ipu_ch);
+			return retval;
+		}
+	}
+
 	ipu_enable_channel(mxc_fbi->ipu, mxc_fbi->ipu_ch);
+	if (ovfbi_enable)
+		ipu_enable_channel(mxc_fbi_fg->ipu, mxc_fbi_fg->ipu_ch);
 
 	if (mxc_fbi->dispdrv && mxc_fbi->dispdrv->drv->enable) {
 		retval = mxc_fbi->dispdrv->drv->enable(mxc_fbi->dispdrv);
@@ -459,6 +560,8 @@ static int mxcfb_set_par(struct fb_info *fbi)
 			return -EINVAL;
 		}
 	}
+
+	mxc_fbi->cur_var = fbi->var;
 
 	return retval;
 }
@@ -580,28 +683,32 @@ static int swap_channels(struct fb_info *fbi_from)
 		break;
 	}
 
-	if (ipu_request_irq(mxc_fbi_from->ipu, mxc_fbi_from->ipu_ch_irq, mxcfb_irq_handler, 0,
+	if (ipu_request_irq(mxc_fbi_from->ipu, mxc_fbi_from->ipu_ch_irq,
+		mxcfb_irq_handler, IPU_IRQF_ONESHOT,
 		MXCFB_NAME, fbi_from) != 0) {
 		dev_err(fbi_from->device, "Error registering irq %d\n",
 			mxc_fbi_from->ipu_ch_irq);
 		return -EBUSY;
 	}
 	ipu_disable_irq(mxc_fbi_from->ipu, mxc_fbi_from->ipu_ch_irq);
-	if (ipu_request_irq(mxc_fbi_to->ipu, mxc_fbi_to->ipu_ch_irq, mxcfb_irq_handler, 0,
+	if (ipu_request_irq(mxc_fbi_to->ipu, mxc_fbi_to->ipu_ch_irq,
+		mxcfb_irq_handler, IPU_IRQF_ONESHOT,
 		MXCFB_NAME, fbi_to) != 0) {
 		dev_err(fbi_to->device, "Error registering irq %d\n",
 			mxc_fbi_to->ipu_ch_irq);
 		return -EBUSY;
 	}
 	ipu_disable_irq(mxc_fbi_to->ipu, mxc_fbi_to->ipu_ch_irq);
-	if (ipu_request_irq(mxc_fbi_from->ipu, mxc_fbi_from->ipu_ch_nf_irq, mxcfb_nf_irq_handler, 0,
+	if (ipu_request_irq(mxc_fbi_from->ipu, mxc_fbi_from->ipu_ch_nf_irq,
+		mxcfb_nf_irq_handler, IPU_IRQF_ONESHOT,
 		MXCFB_NAME, fbi_from) != 0) {
 		dev_err(fbi_from->device, "Error registering irq %d\n",
 			mxc_fbi_from->ipu_ch_nf_irq);
 		return -EBUSY;
 	}
 	ipu_disable_irq(mxc_fbi_from->ipu, mxc_fbi_from->ipu_ch_nf_irq);
-	if (ipu_request_irq(mxc_fbi_to->ipu, mxc_fbi_to->ipu_ch_nf_irq, mxcfb_irq_handler, 0,
+	if (ipu_request_irq(mxc_fbi_to->ipu, mxc_fbi_to->ipu_ch_nf_irq,
+		mxcfb_nf_irq_handler, IPU_IRQF_ONESHOT,
 		MXCFB_NAME, fbi_to) != 0) {
 		dev_err(fbi_to->device, "Error registering irq %d\n",
 			mxc_fbi_to->ipu_ch_nf_irq);
@@ -624,6 +731,10 @@ static int mxcfb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 	u32 vtotal;
 	u32 htotal;
 	struct mxcfb_info *mxc_fbi = (struct mxcfb_info *)info->par;
+
+
+	if (var->xres == 0 || var->yres == 0)
+		return 0;
 
 	/* fg should not bigger than bg */
 	if (mxc_fbi->ipu_ch == MEM_FG_SYNC) {
@@ -798,6 +909,35 @@ static int mxcfb_setcolreg(u_int regno, u_int red, u_int green, u_int blue,
 	return ret;
 }
 
+static void mxcfb_vsync_pre_work(struct work_struct *work)
+{
+	struct mxcfb_info *mxc_fbi =
+		container_of(work, struct mxcfb_info, vsync_pre_work);
+	char *envp[2];
+	char buf[64];
+	unsigned long flags;
+
+	spin_lock_irqsave(&mxc_fbi->lock, flags);
+	snprintf(buf, sizeof(buf), "VSYNC=%llu",
+		 ktime_to_ns(mxc_fbi->vsync_pre_timestamp));
+	spin_unlock_irqrestore(&mxc_fbi->lock, flags);
+
+	envp[0] = buf;
+	envp[1] = NULL;
+	kobject_uevent_env(&mxc_fbi->fbi->dev->kobj, KOBJ_CHANGE, envp);
+}
+
+static void mxcfb_enable_vsync_pre(struct mxcfb_info *mxc_fbi)
+{
+	ipu_clear_irq(mxc_fbi->ipu, mxc_fbi->ipu_vsync_pre_irq);
+	ipu_enable_irq(mxc_fbi->ipu, mxc_fbi->ipu_vsync_pre_irq);
+}
+
+static void mxcfb_disable_vsync_pre(struct mxcfb_info *mxc_fbi)
+{
+	ipu_disable_irq(mxc_fbi->ipu, mxc_fbi->ipu_vsync_pre_irq);
+}
+
 /*
  * Function to handle custom ioctls for MXC framebuffer.
  *
@@ -880,6 +1020,8 @@ static int mxcfb_ioctl(struct fb_info *fbi, unsigned int cmd, unsigned long arg)
 			} else
 				mxc_fbi->alpha_chan_en = false;
 
+			fbi->var.activate = (fbi->var.activate & ~FB_ACTIVATE_MASK) |
+						FB_ACTIVATE_NOW | FB_ACTIVATE_FORCE;
 			mxcfb_set_par(fbi);
 
 			la.alpha_phy_addr0 = mxc_fbi->alpha_phy_addr0;
@@ -926,7 +1068,9 @@ static int mxcfb_ioctl(struct fb_info *fbi, unsigned int cmd, unsigned long arg)
 			else
 				ipu_alp_ch_irq = IPU_IRQ_BG_ALPHA_SYNC_EOF;
 
-			if (down_timeout(&mxc_fbi->alpha_flip_sem, HZ/2)) {
+			retval = wait_for_completion_timeout(
+				&mxc_fbi->alpha_flip_complete, HZ/2);
+			if (retval == 0) {
 				dev_err(fbi->device, "timeout when waiting for alpha flip irq\n");
 				retval = -ETIMEDOUT;
 				break;
@@ -1178,6 +1322,27 @@ static int mxcfb_ioctl(struct fb_info *fbi, unsigned int cmd, unsigned long arg)
 
 			break;
 		}
+	case MXCFB_ENABLE_VSYNC_EVENT:
+	{
+		int enable;
+		if (get_user(enable, (int __user *)arg))
+			return -EFAULT;
+
+		if (mxc_fbi->ipu_ch == MEM_FG_SYNC)
+			return -EINVAL;
+
+		/* Only can control the vsync state when screen is not blank */
+		if (mxc_fbi->vsync_pre_report_active != enable &&
+		    mxc_fbi->cur_blank == FB_BLANK_UNBLANK) {
+			if (enable)
+				mxcfb_enable_vsync_pre(mxc_fbi);
+			else
+				mxcfb_disable_vsync_pre(mxc_fbi);
+		}
+
+		mxc_fbi->vsync_pre_report_active = enable;
+		break;
+	}
 	default:
 		retval = -EINVAL;
 	}
@@ -1213,6 +1378,8 @@ static int mxcfb_blank(int blank, struct fb_info *info)
 		ipu_uninit_channel(mxc_fbi->ipu, mxc_fbi->ipu_ch);
 		break;
 	case FB_BLANK_UNBLANK:
+		info->var.activate = (info->var.activate & ~FB_ACTIVATE_MASK) |
+				FB_ACTIVATE_NOW | FB_ACTIVATE_FORCE;
 		ret = mxcfb_set_par(info);
 		break;
 	}
@@ -1240,9 +1407,7 @@ mxcfb_pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
 	bool loc_alpha_en = false;
 	int fb_stride;
 	int i;
-
-	if (info->var.yoffset == var->yoffset)
-		return 0;	/* No change, do nothing */
+	int ret;
 
 	/* no pan display during fb blank */
 	if (mxc_fbi->ipu_ch == MEM_FG_SYNC) {
@@ -1272,6 +1437,7 @@ mxcfb_pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
 	case IPU_PIX_FMT_YUV422P:
 	case IPU_PIX_FMT_YVU422P:
 	case IPU_PIX_FMT_YUV420P:
+	case IPU_PIX_FMT_YUV444P:
 		fb_stride = info->var.xres_virtual;
 		break;
 	default:
@@ -1322,7 +1488,8 @@ mxcfb_pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
 		}
 	}
 
-	if (down_timeout(&mxc_fbi->flip_sem, HZ/2)) {
+	ret = wait_for_completion_timeout(&mxc_fbi->flip_complete, HZ/2);
+	if (ret == 0) {
 		dev_err(info->device, "timeout when waiting for flip irq\n");
 		return -ETIMEDOUT;
 	}
@@ -1470,8 +1637,7 @@ static irqreturn_t mxcfb_irq_handler(int irq, void *dev_id)
 	struct fb_info *fbi = dev_id;
 	struct mxcfb_info *mxc_fbi = fbi->par;
 
-	up(&mxc_fbi->flip_sem);
-	ipu_disable_irq(mxc_fbi->ipu, irq);
+	complete(&mxc_fbi->flip_complete);
 	return IRQ_HANDLED;
 }
 
@@ -1481,7 +1647,19 @@ static irqreturn_t mxcfb_nf_irq_handler(int irq, void *dev_id)
 	struct mxcfb_info *mxc_fbi = fbi->par;
 
 	complete(&mxc_fbi->vsync_complete);
-	ipu_disable_irq(mxc_fbi->ipu, irq);
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t mxcfb_vsync_pre_irq_handler(int irq, void *dev_id)
+{
+	struct fb_info *fbi = dev_id;
+	struct mxcfb_info *mxc_fbi = fbi->par;
+
+	spin_lock(&mxc_fbi->lock);
+	mxc_fbi->vsync_pre_timestamp = ktime_get();
+	spin_unlock(&mxc_fbi->lock);
+	queue_work(mxc_fbi->vsync_pre_queue, &mxc_fbi->vsync_pre_work);
+
 	return IRQ_HANDLED;
 }
 
@@ -1490,8 +1668,7 @@ static irqreturn_t mxcfb_alpha_irq_handler(int irq, void *dev_id)
 	struct fb_info *fbi = dev_id;
 	struct mxcfb_info *mxc_fbi = fbi->par;
 
-	up(&mxc_fbi->alpha_flip_sem);
-	ipu_disable_irq(mxc_fbi->ipu, irq);
+	complete(&mxc_fbi->alpha_flip_complete);
 	return IRQ_HANDLED;
 }
 
@@ -1800,7 +1977,10 @@ static int mxcfb_option_setup(struct platform_device *pdev)
 	char name[] = "mxcfb0";
 
 	name[5] += pdev->id;
-	fb_get_options(name, &options);
+	if (fb_get_options(name, &options)) {
+		dev_err(&pdev->dev, "Can't get fb option for %s!\n", name);
+		return -ENODEV;
+	}
 
 	if (!options || !*options)
 		return 0;
@@ -1896,29 +2076,41 @@ static int mxcfb_register(struct fb_info *fbi)
 		strcpy(fbi->fix.id, fg_id);
 	}
 
-	if (ipu_request_irq(mxcfbi->ipu, mxcfbi->ipu_ch_irq, mxcfb_irq_handler, 0,
-				MXCFB_NAME, fbi) != 0) {
+	if (ipu_request_irq(mxcfbi->ipu, mxcfbi->ipu_ch_irq,
+		mxcfb_irq_handler, IPU_IRQF_ONESHOT, MXCFB_NAME, fbi) != 0) {
 		dev_err(fbi->device, "Error registering EOF irq handler.\n");
 		ret = -EBUSY;
 		goto err0;
 	}
 	ipu_disable_irq(mxcfbi->ipu, mxcfbi->ipu_ch_irq);
-	if (ipu_request_irq(mxcfbi->ipu, mxcfbi->ipu_ch_nf_irq, mxcfb_nf_irq_handler, 0,
-				MXCFB_NAME, fbi) != 0) {
+	if (ipu_request_irq(mxcfbi->ipu, mxcfbi->ipu_ch_nf_irq,
+		mxcfb_nf_irq_handler, IPU_IRQF_ONESHOT, MXCFB_NAME, fbi) != 0) {
 		dev_err(fbi->device, "Error registering NFACK irq handler.\n");
 		ret = -EBUSY;
 		goto err1;
 	}
 	ipu_disable_irq(mxcfbi->ipu, mxcfbi->ipu_ch_nf_irq);
 
+	if (mxcfbi->ipu_vsync_pre_irq != -1) {
+		if (ipu_request_irq(mxcfbi->ipu, mxcfbi->ipu_vsync_pre_irq,
+				    mxcfb_vsync_pre_irq_handler, 0,
+				    MXCFB_NAME, fbi) != 0) {
+			dev_err(fbi->device, "Error registering VSYNC irq "
+					     "handler.\n");
+			ret = -EBUSY;
+			goto err2;
+		}
+		ipu_disable_irq(mxcfbi->ipu, mxcfbi->ipu_vsync_pre_irq);
+	}
+
 	if (mxcfbi->ipu_alp_ch_irq != -1)
 		if (ipu_request_irq(mxcfbi->ipu, mxcfbi->ipu_alp_ch_irq,
-					mxcfb_alpha_irq_handler, 0,
+				mxcfb_alpha_irq_handler, IPU_IRQF_ONESHOT,
 					MXCFB_NAME, fbi) != 0) {
 			dev_err(fbi->device, "Error registering alpha irq "
 					"handler.\n");
 			ret = -EBUSY;
-			goto err2;
+			goto err3;
 		}
 
 	mxcfb_check_var(&fbi->var, fbi);
@@ -1946,12 +2138,15 @@ static int mxcfb_register(struct fb_info *fbi)
 
 	ret = register_framebuffer(fbi);
 	if (ret < 0)
-		goto err3;
+		goto err4;
 
 	return ret;
-err3:
+err4:
 	if (mxcfbi->ipu_alp_ch_irq != -1)
 		ipu_free_irq(mxcfbi->ipu, mxcfbi->ipu_alp_ch_irq, fbi);
+err3:
+	if (mxcfbi->ipu_vsync_pre_irq != -1)
+		ipu_free_irq(mxcfbi->ipu, mxcfbi->ipu_vsync_pre_irq, fbi);
 err2:
 	ipu_free_irq(mxcfbi->ipu, mxcfbi->ipu_ch_nf_irq, fbi);
 err1:
@@ -1998,6 +2193,8 @@ static int mxcfb_setup_overlay(struct platform_device *pdev,
 	mxcfbi_fg->ipu_ch_irq = IPU_IRQ_FG_SYNC_EOF;
 	mxcfbi_fg->ipu_ch_nf_irq = IPU_IRQ_FG_SYNC_NFACK;
 	mxcfbi_fg->ipu_alp_ch_irq = IPU_IRQ_FG_ALPHA_SYNC_EOF;
+	/* Vsync-pre irq is invalid for overlay channel. */
+	mxcfbi_fg->ipu_vsync_pre_irq = -1;
 	mxcfbi_fg->ipu_ch = MEM_FG_SYNC;
 	mxcfbi_fg->ipu_di = -1;
 	mxcfbi_fg->ipu_di_pix_fmt = mxcfbi_bg->ipu_di_pix_fmt;
@@ -2074,20 +2271,23 @@ static int mxcfb_probe(struct platform_device *pdev)
 	struct mxcfb_info *mxcfbi;
 	struct resource *res;
 	struct device *disp_dev;
+	char buf[32];
 	int ret = 0;
 
-	/*
-	 * Initialize FB structures
-	 */
+	ret = mxcfb_option_setup(pdev);
+	if (ret)
+		goto get_fb_option_failed;
+
+	/* Initialize FB structures */
 	fbi = mxcfb_init_fbinfo(&pdev->dev, &mxcfb_ops);
 	if (!fbi) {
 		ret = -ENOMEM;
 		goto init_fbinfo_failed;
 	}
 
-	mxcfb_option_setup(pdev);
-
 	mxcfbi = (struct mxcfb_info *)fbi->par;
+	spin_lock_init(&mxcfbi->lock);
+	mxcfbi->fbi = fbi;
 	mxcfbi->ipu_int_clk = plat_data->int_clk;
 	ret = mxcfb_dispdrv_init(pdev, fbi);
 	if (ret < 0)
@@ -2119,6 +2319,9 @@ static int mxcfb_probe(struct platform_device *pdev)
 		mxcfbi->ipu_ch_irq = IPU_IRQ_BG_SYNC_EOF;
 		mxcfbi->ipu_ch_nf_irq = IPU_IRQ_BG_SYNC_NFACK;
 		mxcfbi->ipu_alp_ch_irq = IPU_IRQ_BG_ALPHA_SYNC_EOF;
+		mxcfbi->ipu_vsync_pre_irq = mxcfbi->ipu_di ?
+					    IPU_IRQ_VSYNC_PRE_1 :
+					    IPU_IRQ_VSYNC_PRE_0;
 		mxcfbi->ipu_ch = MEM_BG_SYNC;
 		/* Unblank the primary fb only by default */
 		if (pdev->id == 0)
@@ -2160,6 +2363,9 @@ static int mxcfb_probe(struct platform_device *pdev)
 		mxcfbi->ipu_ch_irq = IPU_IRQ_DC_SYNC_EOF;
 		mxcfbi->ipu_ch_nf_irq = IPU_IRQ_DC_SYNC_NFACK;
 		mxcfbi->ipu_alp_ch_irq = -1;
+		mxcfbi->ipu_vsync_pre_irq = mxcfbi->ipu_di ?
+					    IPU_IRQ_VSYNC_PRE_1 :
+					    IPU_IRQ_VSYNC_PRE_0;
 		mxcfbi->ipu_ch = MEM_DC_SYNC;
 		mxcfbi->cur_blank = mxcfbi->next_blank = FB_BLANK_POWERDOWN;
 
@@ -2189,6 +2395,25 @@ static int mxcfb_probe(struct platform_device *pdev)
 				"Error %d on creating file\n", ret);
 	}
 
+	INIT_WORK(&mxcfbi->vsync_pre_work, mxcfb_vsync_pre_work);
+
+	snprintf(buf, sizeof(buf), "mxcfb%d-vsync-pre", fbi->node);
+	mxcfbi->vsync_pre_queue = create_singlethread_workqueue(buf);
+	if (mxcfbi->vsync_pre_queue == NULL) {
+		dev_err(fbi->device,
+			"Failed to alloc vsync-pre workqueue\n");
+		ret = -ENOMEM;
+		goto workqueue_alloc_failed;
+	}
+
+#ifdef CONFIG_HAS_EARLYSUSPEND
+	mxcfbi->fbdrv_earlysuspend.level = EARLY_SUSPEND_LEVEL_DISABLE_FB;
+	mxcfbi->fbdrv_earlysuspend.suspend = mxcfb_early_suspend;
+	mxcfbi->fbdrv_earlysuspend.resume = mxcfb_later_resume;
+	mxcfbi->fbdrv_earlysuspend.data = pdev;
+	register_early_suspend(&mxcfbi->fbdrv_earlysuspend);
+#endif
+
 #ifdef CONFIG_LOGO
 	fb_prepare_logo(fbi, 0);
 	fb_show_logo(fbi, 0);
@@ -2196,6 +2421,7 @@ static int mxcfb_probe(struct platform_device *pdev)
 
 	return 0;
 
+workqueue_alloc_failed:
 mxcfb_setupoverlay_failed:
 mxcfb_register_failed:
 get_ipu_failed:
@@ -2205,6 +2431,7 @@ init_dispdrv_failed:
 	fb_dealloc_cmap(&fbi->cmap);
 	framebuffer_release(fbi);
 init_fbinfo_failed:
+get_fb_option_failed:
 	return ret;
 }
 
@@ -2215,6 +2442,10 @@ static int mxcfb_remove(struct platform_device *pdev)
 
 	if (!fbi)
 		return 0;
+
+#ifdef CONFIG_HAS_EARLYSUSPEND
+	unregister_early_suspend(&mxc_fbi->fbdrv_earlysuspend);
+#endif
 
 	device_remove_file(fbi->dev, &dev_attr_fsl_disp_dev_property);
 	device_remove_file(fbi->dev, &dev_attr_fsl_disp_property);
@@ -2255,60 +2486,47 @@ static struct platform_driver mxcfb_driver = {
 #ifdef CONFIG_HAS_EARLYSUSPEND
 static void mxcfb_early_suspend(struct early_suspend *h)
 {
-	int i;
-	struct platform_device *pdev;
-	struct mxcfb_info *mxcfbi;
-	struct fb_info *fbi;
+	struct platform_device *pdev = (struct platform_device *)h->data;
+	struct fb_info *fbi = platform_get_drvdata(pdev);
+	struct mxcfb_info *mxcfbi = (struct mxcfb_info *)fbi->par;
 	pm_message_t state = { .event = PM_EVENT_SUSPEND };
 	struct fb_event event;
 	int blank = FB_BLANK_POWERDOWN;
 
-	for (i = 0; i < num_registered_fb; i++) {
-		mxcfbi = (struct mxcfb_info *)registered_fb[i]->par;
-		if (!mxcfbi || mxcfbi->ipu_ch == MEM_FG_SYNC)
-			continue;
-		pdev = to_platform_device(registered_fb[i]->device);
-		if (strstr(mxcfbi->dispdrv->drv->name, "hdmi")) {
-			/* Only black the hdmi fb due to audio dependency */
-			fbi = platform_get_drvdata(pdev);
-			memset(fbi->screen_base, 0, fbi->fix.smem_len);
-			continue;
-		}
-		mxcfb_core_suspend(pdev, state);
-		event.info = registered_fb[i];
-		event.data = &blank;
-		fb_notifier_call_chain(FB_EVENT_BLANK, &event);
+	if (mxcfbi->ipu_ch == MEM_FG_SYNC)
+		return;
+
+	if (strstr(mxcfbi->dispdrv->drv->name, "hdmi")) {
+		/* Only black the hdmi fb due to audio dependency */
+		memset(fbi->screen_base, 0, fbi->fix.smem_len);
+		return;
 	}
+
+	mxcfb_core_suspend(pdev, state);
+	event.info = fbi;
+	event.data = &blank;
+	fb_notifier_call_chain(FB_EVENT_BLANK, &event);
 }
 
 static void mxcfb_later_resume(struct early_suspend *h)
 {
-	int i;
-	struct platform_device *pdev;
+	struct platform_device *pdev = (struct platform_device *)h->data;
+	struct fb_info *fbi = platform_get_drvdata(pdev);
+	struct mxcfb_info *mxcfbi = (struct mxcfb_info *)fbi->par;
 	struct fb_event event;
-	struct mxcfb_info *mxcfbi;
 
-	for (i = num_registered_fb - 1; i >= 0; i-- ) {
-		mxcfbi = (struct mxcfb_info *)registered_fb[i]->par;
-		if (!mxcfbi || mxcfbi->ipu_ch == MEM_FG_SYNC)
-			continue;
-		pdev = to_platform_device(registered_fb[i]->device);
-		/* HDMI resume function has been called */
-		if (strstr(mxcfbi->dispdrv->drv->name, "hdmi"))
-			continue;
+	if (mxcfbi->ipu_ch == MEM_FG_SYNC)
+		return;
 
-		mxcfb_core_resume(pdev);
-		event.info = registered_fb[i];
-		event.data = &mxcfbi->next_blank;
-		fb_notifier_call_chain(FB_EVENT_BLANK, &event);
-	}
+	/* HDMI resume function has been called */
+	if (strstr(mxcfbi->dispdrv->drv->name, "hdmi"))
+		return;
+
+	mxcfb_core_resume(pdev);
+	event.info = fbi;
+	event.data = &mxcfbi->next_blank;
+	fb_notifier_call_chain(FB_EVENT_BLANK, &event);
 }
-
-struct early_suspend fbdrv_earlysuspend = {
-	.level = EARLY_SUSPEND_LEVEL_DISABLE_FB,
-	.suspend = mxcfb_early_suspend,
-	.resume = mxcfb_later_resume,
-};
 #endif
 
 /*!
@@ -2320,16 +2538,11 @@ struct early_suspend fbdrv_earlysuspend = {
  */
 int __init mxcfb_init(void)
 {
-	int ret;
-	ret = platform_driver_register(&mxcfb_driver);
-	if (!ret)
-		register_early_suspend(&fbdrv_earlysuspend);
-	return ret;
+	return platform_driver_register(&mxcfb_driver);
 }
 
 void mxcfb_exit(void)
 {
-	unregister_early_suspend(&fbdrv_earlysuspend);
 	platform_driver_unregister(&mxcfb_driver);
 }
 

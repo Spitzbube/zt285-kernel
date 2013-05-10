@@ -55,7 +55,9 @@
 #include <linux/regulator/consumer.h>
 #include <linux/regulator/machine.h>
 #include <linux/regulator/fixed.h>
+#include <linux/mxc_asrc.h>
 #include <sound/pcm.h>
+#include <linux/mfd/mxc-hdmi-core.h>
 
 #include <mach/common.h>
 #include <mach/hardware.h>
@@ -104,6 +106,7 @@
 #define SABREAUTO_CSI0_RST		IMX_GPIO_NR(4, 5)
 #define SABREAUTO_DISP0_RESET		IMX_GPIO_NR(5, 0)
 #define SABREAUTO_I2C3_STEER		IMX_GPIO_NR(5, 4)
+#define SABREAUTO_WEIM_NOR_WDOG1        IMX_GPIO_NR(4, 29)
 #define SABREAUTO_ANDROID_VOLDOWN	IMX_GPIO_NR(5, 14)
 #define SABREAUTO_PMIC_INT		IMX_GPIO_NR(5, 16)
 #define SABREAUTO_ALS_INT		IMX_GPIO_NR(5, 17)
@@ -120,6 +123,7 @@
 #define SABREAUTO_IO_EXP_GPIO2(x)	(SABREAUTO_MAX7310_2_BASE_ADDR + (x))
 #define SABREAUTO_IO_EXP_GPIO3(x)	(SABREAUTO_MAX7310_3_BASE_ADDR + (x))
 
+#define SABREAUTO_PCIE_RST_B_REVB	(SABREAUTO_MAX7310_1_BASE_ADDR + 2)
 /*
  * CAN2 STBY and EN lines are the same as the CAN1. These lines are not
  * independent.
@@ -133,13 +137,32 @@
 #define SABREAUTO_USB_OTG_PWR		SABREAUTO_IO_EXP_GPIO3(1)
 #define BMCR_PDOWN			0x0800 /* PHY Powerdown */
 
+extern char *gp_reg_id;
+extern char *soc_reg_id;
+extern char *pu_reg_id;
+
 static int mma8451_position = 3;
 static struct clk *sata_clk;
 static int mipi_sensor;
 static int can0_enable;
 static int uart3_en;
 static int tuner_en;
-extern volatile int num_cpu_idle_lock;
+static int spinor_en;
+static int weimnor_en;
+
+static int __init spinor_enable(char *p)
+{
+       spinor_en = 1;
+       return 0;
+}
+early_param("spi-nor", spinor_enable);
+
+static int __init weimnor_enable(char *p)
+{
+       weimnor_en = 1;
+       return 0;
+}
+early_param("weim-nor", weimnor_enable);
 
 static int __init uart3_enable(char *p)
 {
@@ -202,57 +225,63 @@ static void __init imx6q_add_android_device_buttons(void)
 static void __init imx6q_add_android_device_buttons(void) {}
 #endif
 
-static int plt_sd3_pad_change(int clock)
+static int plt_sd_pad_change(unsigned int index, int clock)
 {
+	/* LOW speed is the default state of SD pads */
 	static enum sd_pad_mode pad_mode = SD_PAD_MODE_LOW_SPEED;
 
-	iomux_v3_cfg_t *sd3_pads_200mhz = NULL;
-	iomux_v3_cfg_t *sd3_pads_100mhz = NULL;
-	iomux_v3_cfg_t *sd3_pads_50mhz = NULL;
+	iomux_v3_cfg_t *sd_pads_200mhz = NULL;
+	iomux_v3_cfg_t *sd_pads_100mhz = NULL;
+	iomux_v3_cfg_t *sd_pads_50mhz = NULL;
 
-	u32 sd3_pads_200mhz_cnt;
-	u32 sd3_pads_100mhz_cnt;
-	u32 sd3_pads_50mhz_cnt;
+	u32 sd_pads_200mhz_cnt;
+	u32 sd_pads_100mhz_cnt;
+	u32 sd_pads_50mhz_cnt;
+
+	if (index != 2) {
+		printk(KERN_ERR"no such SD host controller index %d\n", index);
+		return -EINVAL;
+	}
 
 	if (cpu_is_mx6q()) {
-		sd3_pads_200mhz = mx6q_sd3_200mhz;
-		sd3_pads_100mhz = mx6q_sd3_100mhz;
-		sd3_pads_50mhz = mx6q_sd3_50mhz;
+		sd_pads_200mhz = mx6q_sd3_200mhz;
+		sd_pads_100mhz = mx6q_sd3_100mhz;
+		sd_pads_50mhz = mx6q_sd3_50mhz;
 
-		sd3_pads_200mhz_cnt = ARRAY_SIZE(mx6q_sd3_200mhz);
-		sd3_pads_100mhz_cnt = ARRAY_SIZE(mx6q_sd3_100mhz);
-		sd3_pads_50mhz_cnt = ARRAY_SIZE(mx6q_sd3_50mhz);
+		sd_pads_200mhz_cnt = ARRAY_SIZE(mx6q_sd3_200mhz);
+		sd_pads_100mhz_cnt = ARRAY_SIZE(mx6q_sd3_100mhz);
+		sd_pads_50mhz_cnt = ARRAY_SIZE(mx6q_sd3_50mhz);
 	} else if (cpu_is_mx6dl()) {
-		sd3_pads_200mhz = mx6dl_sd3_200mhz;
-		sd3_pads_100mhz = mx6dl_sd3_100mhz;
-		sd3_pads_50mhz = mx6dl_sd3_50mhz;
+		sd_pads_200mhz = mx6dl_sd3_200mhz;
+		sd_pads_100mhz = mx6dl_sd3_100mhz;
+		sd_pads_50mhz = mx6dl_sd3_50mhz;
 
-		sd3_pads_200mhz_cnt = ARRAY_SIZE(mx6dl_sd3_200mhz);
-		sd3_pads_100mhz_cnt = ARRAY_SIZE(mx6dl_sd3_100mhz);
-		sd3_pads_50mhz_cnt = ARRAY_SIZE(mx6dl_sd3_50mhz);
+		sd_pads_200mhz_cnt = ARRAY_SIZE(mx6dl_sd3_200mhz);
+		sd_pads_100mhz_cnt = ARRAY_SIZE(mx6dl_sd3_100mhz);
+		sd_pads_50mhz_cnt = ARRAY_SIZE(mx6dl_sd3_50mhz);
 	}
 
 	if (clock > 100000000) {
 		if (pad_mode == SD_PAD_MODE_HIGH_SPEED)
 			return 0;
-		BUG_ON(!sd3_pads_200mhz);
+		BUG_ON(!sd_pads_200mhz);
 		pad_mode = SD_PAD_MODE_HIGH_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(sd3_pads_200mhz,
-							sd3_pads_200mhz_cnt);
+		return mxc_iomux_v3_setup_multiple_pads(sd_pads_200mhz,
+							sd_pads_200mhz_cnt);
 	} else if (clock > 52000000) {
 		if (pad_mode == SD_PAD_MODE_MED_SPEED)
 			return 0;
-		BUG_ON(!sd3_pads_100mhz);
+		BUG_ON(!sd_pads_100mhz);
 		pad_mode = SD_PAD_MODE_MED_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(sd3_pads_100mhz,
-							sd3_pads_100mhz_cnt);
+		return mxc_iomux_v3_setup_multiple_pads(sd_pads_100mhz,
+							sd_pads_100mhz_cnt);
 	} else {
 		if (pad_mode == SD_PAD_MODE_LOW_SPEED)
 			return 0;
-		BUG_ON(!sd3_pads_50mhz);
+		BUG_ON(!sd_pads_50mhz);
 		pad_mode = SD_PAD_MODE_LOW_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(sd3_pads_50mhz,
-							sd3_pads_50mhz_cnt);
+		return mxc_iomux_v3_setup_multiple_pads(sd_pads_50mhz,
+							sd_pads_50mhz_cnt);
 	}
 }
 
@@ -263,7 +292,7 @@ static const struct esdhc_platform_data mx6q_sabreauto_sd3_data __initconst = {
 	.support_18v		= 1,
 	.support_8bit		= 1,
 	.delay_line		= 0,
-	.platform_pad_change	= plt_sd3_pad_change,
+	.platform_pad_change	= plt_sd_pad_change,
 };
 
 static const struct esdhc_platform_data mx6q_sabreauto_sd1_data __initconst = {
@@ -378,7 +407,7 @@ static struct mtd_partition m25p32_partitions[] = {
 	{
 		.name	= "bootloader",
 		.offset	= 0,
-		.size	= 0x00040000,
+		.size	= 0x00100000,
 	}, {
 		.name	= "kernel",
 		.offset	= MTDPART_OFS_APPEND,
@@ -476,7 +505,7 @@ static int max7310_1_setup(struct i2c_client *client,
 	/* 7 GPS_RST_B */
 
 	int max7310_gpio_value[] = {
-		0, 1, 1, 1, 0, 0, 0, 0,
+		0, 1, 1, 1, 0, 0, 1, 0,
 	};
 
 	int n;
@@ -734,7 +763,6 @@ static void __init imx6q_sabreauto_init_usb(void)
 	mx6_set_otghost_vbus_func(imx6q_sabreauto_usbotg_vbus);
 	mx6_usb_dr_init();
 	mx6_set_host1_vbus_func(imx6q_sabreauto_usbhost1_vbus);
-	mx6_usb_h1_init();
 #ifdef CONFIG_USB_EHCI_ARC_HSIC
 	mx6_usb_h2_init();
 	mx6_usb_h3_init();
@@ -742,7 +770,7 @@ static void __init imx6q_sabreauto_init_usb(void)
 }
 
 static struct viv_gpu_platform_data imx6q_gpu_pdata __initdata = {
-	.reserved_mem_size = SZ_128M,
+	.reserved_mem_size = SZ_128M + SZ_64M,
 };
 
 /* HW Initialization, if return 0, initialization is successful. */
@@ -888,10 +916,40 @@ static void hdmi_init(int ipu_id, int disp_id)
 
 	/* GPR3, bits 2-3 = HDMI_MUX_CTL */
 	mxc_iomux_set_gpr_register(3, 2, 2, hdmi_mux_setting);
+
+	/* Set HDMI event as SDMA event2 while Chip version later than TO1.2 */
+	if (hdmi_SDMA_check())
+		mxc_iomux_set_gpr_register(0, 0, 1, 1);
+}
+
+/* On mx6x sabreauto board i2c2 iomux with hdmi ddc,
+ * the pins default work at i2c2 function,
+ when hdcp enable, the pins should work at ddc function */
+
+static void hdmi_enable_ddc_pin(void)
+{
+	if (cpu_is_mx6dl())
+		mxc_iomux_v3_setup_multiple_pads(mx6dl_sabreauto_hdmi_ddc_pads,
+			ARRAY_SIZE(mx6dl_sabreauto_hdmi_ddc_pads));
+	else
+		mxc_iomux_v3_setup_multiple_pads(mx6q_sabreauto_hdmi_ddc_pads,
+			ARRAY_SIZE(mx6q_sabreauto_hdmi_ddc_pads));
+}
+
+static void hdmi_disable_ddc_pin(void)
+{
+	if (cpu_is_mx6dl())
+		mxc_iomux_v3_setup_multiple_pads(mx6dl_sabreauto_i2c2_pads,
+			ARRAY_SIZE(mx6dl_sabreauto_i2c2_pads));
+	else
+		mxc_iomux_v3_setup_multiple_pads(mx6q_sabreauto_i2c2_pads,
+			ARRAY_SIZE(mx6q_sabreauto_i2c2_pads));
 }
 
 static struct fsl_mxc_hdmi_platform_data hdmi_data = {
 	.init = hdmi_init,
+	.enable_pins = hdmi_enable_ddc_pin,
+	.disable_pins = hdmi_disable_ddc_pin,
 };
 
 static struct fsl_mxc_hdmi_core_platform_data hdmi_core_data = {
@@ -1026,9 +1084,15 @@ static const struct pm_platform_data mx6q_sabreauto_pm_data __initconst = {
 	.suspend_exit	= sabreauto_suspend_exit,
 };
 
+static const struct asrc_p2p_params esai_p2p = {
+	.p2p_rate = 48000,
+	.p2p_width = ASRC_WIDTH_24_BIT,
+};
+
 static struct mxc_audio_platform_data sab_audio_data = {
 	.sysclk		= 24576000,
 	.codec_name	= "cs42888.1-0048",
+	.priv = (void *)&esai_p2p,
 };
 
 static struct platform_device sab_audio_device = {
@@ -1208,6 +1272,8 @@ static struct mxc_mlb_platform_data mx6_sabreauto_mlb150_data = {
 
 static struct mxc_dvfs_platform_data sabreauto_dvfscore_data = {
 	.reg_id			= "cpu_vddgp",
+	.soc_id			= "cpu_vddsoc",
+	.pu_id			= "cpu_vddvpu",
 	.clk1_id		= "cpu_clk",
 	.clk2_id 		= "gpc_dvfs_clk",
 	.gpc_cntr_offset 	= MXC_GPC_CNTR_OFFSET,
@@ -1273,6 +1339,27 @@ static struct mxc_spdif_platform_data mxc_spdif_data = {
 	.spdif_clk	= NULL,	/* spdif bus clk */
 };
 
+static struct fsl_mxc_capture_platform_data capture_data[] = {
+	{
+		.csi = 0,
+		.ipu = 0,
+		.mclk_source = 0,
+		.is_mipi = 0,
+	}, {
+		.csi = 1,
+		.ipu = 0,
+		.mclk_source = 0,
+		.is_mipi = 1,
+	},
+};
+
+static const struct imx_pcie_platform_data mx6_sabreauto_pcie_data __initconst = {
+	.pcie_pwr_en	= -EINVAL,
+	.pcie_rst	= SABREAUTO_PCIE_RST_B_REVB,
+	.pcie_wake_up	= -EINVAL,
+	.pcie_dis	= -EINVAL,
+};
+
 /*!
  * Board specific initialization.
  */
@@ -1286,6 +1373,8 @@ static void __init mx6_board_init(void)
 	iomux_v3_cfg_t *mipi_sensor_pads = NULL;
 	iomux_v3_cfg_t *i2c3_pads = NULL;
 	iomux_v3_cfg_t *tuner_pads = NULL;
+	iomux_v3_cfg_t *spinor_pads = NULL;
+	iomux_v3_cfg_t *weimnor_pads = NULL;
 
 	int common_pads_cnt;
 	int can0_pads_cnt;
@@ -1293,6 +1382,8 @@ static void __init mx6_board_init(void)
 	int mipi_sensor_pads_cnt;
 	int i2c3_pads_cnt;
 	int tuner_pads_cnt;
+	int spinor_pads_cnt;
+	int weimnor_pads_cnt;
 
 	if (cpu_is_mx6q()) {
 		common_pads = mx6q_sabreauto_pads;
@@ -1300,12 +1391,16 @@ static void __init mx6_board_init(void)
 		can1_pads = mx6q_sabreauto_can1_pads;
 		mipi_sensor_pads = mx6q_sabreauto_mipi_sensor_pads;
 		tuner_pads = mx6q_tuner_pads;
+		spinor_pads = mx6q_spinor_pads;
+		weimnor_pads = mx6q_weimnor_pads;
 
 		common_pads_cnt = ARRAY_SIZE(mx6q_sabreauto_pads);
 		can0_pads_cnt = ARRAY_SIZE(mx6q_sabreauto_can0_pads);
 		can1_pads_cnt = ARRAY_SIZE(mx6q_sabreauto_can1_pads);
 		mipi_sensor_pads_cnt = ARRAY_SIZE(mx6q_sabreauto_mipi_sensor_pads);
 		tuner_pads_cnt = ARRAY_SIZE(mx6q_tuner_pads);
+		spinor_pads_cnt = ARRAY_SIZE(mx6q_spinor_pads);
+		weimnor_pads_cnt = ARRAY_SIZE(mx6q_weimnor_pads);
 		if (board_is_mx6_reva()) {
 			i2c3_pads = mx6q_i2c3_pads_rev_a;
 			i2c3_pads_cnt = ARRAY_SIZE(mx6q_i2c3_pads_rev_a);
@@ -1319,12 +1414,17 @@ static void __init mx6_board_init(void)
 		can1_pads = mx6dl_sabreauto_can1_pads;
 		mipi_sensor_pads = mx6dl_sabreauto_mipi_sensor_pads;
 		tuner_pads = mx6dl_tuner_pads;
+		spinor_pads = mx6dl_spinor_pads;
+		weimnor_pads = mx6dl_weimnor_pads;
 
 		common_pads_cnt = ARRAY_SIZE(mx6dl_sabreauto_pads);
 		can0_pads_cnt = ARRAY_SIZE(mx6dl_sabreauto_can0_pads);
 		can1_pads_cnt = ARRAY_SIZE(mx6dl_sabreauto_can1_pads);
 		mipi_sensor_pads_cnt = ARRAY_SIZE(mx6dl_sabreauto_mipi_sensor_pads);
 		tuner_pads_cnt = ARRAY_SIZE(mx6dl_tuner_pads);
+		spinor_pads_cnt = ARRAY_SIZE(mx6dl_spinor_pads);
+		weimnor_pads_cnt = ARRAY_SIZE(mx6dl_weimnor_pads);
+
 		if (board_is_mx6_reva()) {
 			i2c3_pads = mx6dl_i2c3_pads_rev_a;
 			i2c3_pads_cnt = ARRAY_SIZE(mx6dl_i2c3_pads_rev_a);
@@ -1332,14 +1432,23 @@ static void __init mx6_board_init(void)
 			i2c3_pads = mx6dl_i2c3_pads_rev_b;
 			i2c3_pads_cnt = ARRAY_SIZE(mx6dl_i2c3_pads_rev_b);
 		}
-		num_cpu_idle_lock = 0xffff0000;
 	}
 
 	BUG_ON(!common_pads);
 	mxc_iomux_v3_setup_multiple_pads(common_pads, common_pads_cnt);
-	BUG_ON(!i2c3_pads);
-	mxc_iomux_v3_setup_multiple_pads(i2c3_pads, i2c3_pads_cnt);
 
+	/*If at least one NOR memory is selected we don't configure IC23 PADS*/
+	if (spinor_en) {
+		BUG_ON(!spinor_pads);
+		mxc_iomux_v3_setup_multiple_pads(spinor_pads, spinor_pads_cnt);
+	} else if (weimnor_en) {
+		BUG_ON(!weimnor_pads);
+		mxc_iomux_v3_setup_multiple_pads(weimnor_pads,
+						weimnor_pads_cnt);
+	} else {
+		BUG_ON(!i2c3_pads);
+		mxc_iomux_v3_setup_multiple_pads(i2c3_pads, i2c3_pads_cnt);
+	}
 	if (can0_enable) {
 		BUG_ON(!can0_pads);
 		mxc_iomux_v3_setup_multiple_pads(can0_pads,
@@ -1359,8 +1468,18 @@ static void __init mx6_board_init(void)
 	gpio_direction_output(SABREAUTO_I2C_EXP_RST, 1);
 
 	if (!board_is_mx6_reva()) {
-		/* enable i2c3_sda route path */
+		/* enable either EIM_D18 or i2c3_sda route path */
 		gpio_request(SABREAUTO_I2C3_STEER, "i2c3-steer");
+		if (spinor_en)
+			gpio_direction_output(SABREAUTO_I2C3_STEER, 0);
+		else if (weimnor_en) {
+			/*Put DISP0_DAT8 in ALT5 mode to prevent WDOG1 of
+			resetting WEIM NOR*/
+			gpio_direction_output(SABREAUTO_I2C3_STEER, 0);
+
+			gpio_request(SABREAUTO_WEIM_NOR_WDOG1, "nor-reset");
+			gpio_direction_output(SABREAUTO_WEIM_NOR_WDOG1, 1);
+		} else
 		gpio_direction_output(SABREAUTO_I2C3_STEER, 1);
 		/* Set GPIO_16 input for IEEE-1588 ts_clk and
 		 * RMII reference clk
@@ -1378,6 +1497,8 @@ static void __init mx6_board_init(void)
 	}
 
 	gp_reg_id = sabreauto_dvfscore_data.reg_id;
+	soc_reg_id = sabreauto_dvfscore_data.soc_id;
+	pu_reg_id = sabreauto_dvfscore_data.pu_id;
 	mx6q_sabreauto_init_uart();
 	imx6q_add_mipi_csi2(&mipi_csi2_pdata);
 	if (cpu_is_mx6dl()) {
@@ -1405,10 +1526,13 @@ static void __init mx6_board_init(void)
 	imx6q_add_lcdif(&lcdif_data);
 	imx6q_add_ldb(&ldb_data);
 	imx6q_add_v4l2_output(0);
-	imx6q_add_v4l2_capture(0);
+	imx6q_add_v4l2_capture(0, &capture_data[0]);
+	imx6q_add_v4l2_capture(1, &capture_data[1]);
 	imx6q_add_android_device_buttons();
 
 	imx6q_add_imx_snvs_rtc();
+
+	imx6q_add_imx_caam();
 
 	imx6q_add_imx_i2c(1, &mx6q_sabreauto_i2c1_data);
 	i2c_register_board_info(1, mxc_i2c1_board_info,
@@ -1428,10 +1552,10 @@ static void __init mx6_board_init(void)
 	/* SPI */
 	imx6q_add_ecspi(0, &mx6q_sabreauto_spi_data);
 #if defined(CONFIG_MTD_M25P80) || defined(CONFIG_MTD_M25P80_MODULE)
-	spi_device_init();
+		spi_device_init();
 #else
-	mx6q_setup_weimcs();
-	platform_device_register(&physmap_flash_device);
+		mx6q_setup_weimcs();
+		platform_device_register(&physmap_flash_device);
 #endif
 	imx6q_add_mxc_hdmi(&hdmi_data);
 
@@ -1514,6 +1638,13 @@ static void __init mx6_board_init(void)
 	mxc_register_device(&mxc_si4763_audio_device, &si4763_audio_data);
 
 	imx6q_add_busfreq();
+
+	/* Add PCIe RC interface support */
+	imx6q_add_pcie(&mx6_sabreauto_pcie_data);
+
+	imx6q_add_perfmon(0);
+	imx6q_add_perfmon(1);
+	imx6q_add_perfmon(2);
 }
 
 extern void __iomem *twd_base;
@@ -1537,21 +1668,23 @@ static struct sys_timer mxc_timer = {
 static void __init mx6q_reserve(void)
 {
 	phys_addr_t phys;
-
+#if defined(CONFIG_MXC_GPU_VIV) || defined(CONFIG_MXC_GPU_VIV_MODULE)
 	if (imx6q_gpu_pdata.reserved_mem_size) {
 		phys = memblock_alloc_base(imx6q_gpu_pdata.reserved_mem_size,
 			SZ_4K, SZ_2G);
-		memblock_free(phys, imx6q_gpu_pdata.reserved_mem_size);
 		memblock_remove(phys, imx6q_gpu_pdata.reserved_mem_size);
 		imx6q_gpu_pdata.reserved_mem_base = phys;
 	}
+#endif
 
+#if defined(CONFIG_ION)
 	if (imx_ion_data.heaps[0].size) {
 		phys = memblock_alloc(imx_ion_data.heaps[0].size, SZ_4K);
 		memblock_free(phys, imx_ion_data.heaps[0].size);
 		memblock_remove(phys, imx_ion_data.heaps[0].size);
 		imx_ion_data.heaps[0].base = phys;
 	}
+#endif
 }
 
 MACHINE_START(MX6Q_SABREAUTO, "Freescale i.MX 6Quad/DualLite/Solo Sabre Auto Board")

@@ -152,6 +152,13 @@
 #   define gcdDUMP_FRAMERATE					0
 #endif
 
+/*
+    gcdENABLE_FSCALE_VAL_ADJUST
+        When non-zero, FSCALE_VAL when gcvPOWER_ON can be adjusted externally.
+ */
+#ifndef gcdENABLE_FSCALE_VAL_ADJUST
+#   define gcdENABLE_FSCALE_VAL_ADJUST          1
+#endif
 
 /*
     gcdDUMP_IN_KERNEL
@@ -258,7 +265,7 @@
         virtual data.
 */
 #ifndef gcdMMU_SIZE
-#   define gcdMMU_SIZE                          (128 << 10)
+#   define gcdMMU_SIZE                          (2048 << 10)
 #endif
 
 /*
@@ -348,7 +355,7 @@
         otherwise GPU will enter gcvPOWER_IDLE.
 */
 #ifndef gcdPOWER_SUSNPEND_WHEN_IDLE
-#   define gcdPOWER_SUSNPEND_WHEN_IDLE          0
+#   define gcdPOWER_SUSNPEND_WHEN_IDLE          1
 #endif
 
 /*
@@ -733,15 +740,8 @@
 #ifndef gcdSHARED_PAGETABLE
 #   define gcdSHARED_PAGETABLE                  1
 #endif
-
-/*
-    gcdBLOB_CACHE_ENABLED
-        When non-zero, Android blob cache extension will be enabled.
-        Otherwise, caching will be by-passed.
- */
-
-#ifndef gcdBLOB_CACHE_ENABLED
-#   define gcdBLOB_CACHE_ENABLED                0
+#ifndef gcdUSE_PVR
+#   define gcdUSE_PVR			                1
 #endif
 
 /*
@@ -759,6 +759,14 @@
 #   define gcdRATIO_FOR_SMALL_MEMORY            32
 #endif
 
+/*
+    gcdCONTIGUOUS_SIZE_LIMIT
+        When non-zero, size of video node from gcvPOOL_CONTIGUOUS is
+        limited by gcdCONTIGUOUS_SIZE_LIMIT.
+ */
+#ifndef gcdCONTIGUOUS_SIZE_LIMIT
+#   define gcdCONTIGUOUS_SIZE_LIMIT             0
+#endif
 
 /*  gcdALPHA_KILL_IN_SHADER
  *
@@ -776,6 +784,10 @@
  */
 #ifndef gcdHIGH_PRECISION_DELAY_ENABLE
 #   define gcdHIGH_PRECISION_DELAY_ENABLE        1
+#endif
+
+#ifndef gcdUSE_WCLIP_PATCH
+#   define gcdUSE_WCLIP_PATCH                   1
 #endif
 
 #endif /* __gc_hal_options_h_ */

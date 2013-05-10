@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2011 Freescale Semiconductor, Inc.
+ * Copyright (C) 2010-2012 Freescale Semiconductor, Inc.
  */
 
 /*
@@ -75,6 +75,7 @@ struct mxc_elcdif_fb_data {
 	struct completion vsync_complete;
 	struct completion frame_done_complete;
 	struct semaphore flip_sem;
+	struct fb_var_screeninfo var;
 	u32 pseudo_palette[16];
 };
 
@@ -128,8 +129,10 @@ static inline void setup_dotclk_panel(u32 pixel_clk,
 	__raw_writel(BM_ELCDIF_CTRL_SHIFT_NUM_BITS,
 		     elcdif_base + HW_ELCDIF_CTRL_CLR);
 
+	__raw_writel(BM_ELCDIF_CTRL2_OUTSTANDING_REQS,
+		     elcdif_base + HW_ELCDIF_CTRL2_CLR);
 	__raw_writel(BF_ELCDIF_CTRL2_OUTSTANDING_REQS
-		    (BV_ELCDIF_CTRL2_OUTSTANDING_REQS__REQ_8),
+		    (BV_ELCDIF_CTRL2_OUTSTANDING_REQS__REQ_16),
 		     elcdif_base + HW_ELCDIF_CTRL2_SET);
 
 	/* Recover on underflow */
@@ -773,6 +776,28 @@ static int mxc_elcdif_fb_setcolreg(u_int regno, u_int red, u_int green,
 	return ret;
 }
 
+/**
+   This function compare the fb parameter see whether it was different
+   parameter for hardware, if it was different parameter, the hardware
+   will reinitialize. All will compared except x/y offset.
+ */
+static bool mxc_elcdif_fb_par_equal(struct fb_info *fbi, struct mxc_elcdif_fb_data *data)
+{
+	/* Here we set the xoffset, yoffset to zero, and compare two
+	 * var see have different or not. */
+	struct fb_var_screeninfo oldvar = data->var;
+	struct fb_var_screeninfo newvar = fbi->var;
+
+	if ((fbi->var.activate & FB_ACTIVATE_MASK) == FB_ACTIVATE_NOW &&
+	    fbi->var.activate & FB_ACTIVATE_FORCE)
+		return false;
+
+	oldvar.xoffset = newvar.xoffset = 0;
+	oldvar.yoffset = newvar.yoffset = 0;
+
+	return memcmp(&oldvar, &newvar, sizeof(struct fb_var_screeninfo)) == 0;
+}
+
 /*
  * This routine actually sets the video mode. It's in here where we
  * the hardware state info->par and fix which can be affected by the
@@ -786,6 +811,10 @@ static int mxc_elcdif_fb_set_par(struct fb_info *fbi)
 	int mem_len;
 
 	dev_dbg(fbi->device, "Reconfiguring framebuffer\n");
+
+	/* If parameter no change, don't reconfigure. */
+	if (mxc_elcdif_fb_par_equal(fbi, data))
+	    return 0;
 
 	sema_init(&data->flip_sem, 1);
 
@@ -824,7 +853,7 @@ static int mxc_elcdif_fb_set_par(struct fb_info *fbi)
 	mxc_init_elcdif();
 	mxc_elcdif_init_panel();
 
-	dev_dbg(fbi->device, "pixclock = %ul Hz\n",
+	dev_dbg(fbi->device, "pixclock = %u Hz\n",
 		(u32) (PICOS2KHZ(fbi->var.pixclock) * 1000UL));
 
 	memset(&sig_cfg, 0, sizeof(sig_cfg));
@@ -858,6 +887,8 @@ static int mxc_elcdif_fb_set_par(struct fb_info *fbi)
 
 	fbi->mode = (struct fb_videomode *)fb_match_mode(&fbi->var,
 							 &fbi->modelist);
+	data->var = fbi->var;
+
 	return 0;
 }
 
@@ -1061,6 +1092,8 @@ static int mxc_elcdif_fb_blank(int blank, struct fb_info *info)
 		return ret;
 
 	if (blank == FB_BLANK_UNBLANK) {
+		info->var.activate = (info->var.activate & ~FB_ACTIVATE_MASK) |
+				FB_ACTIVATE_NOW | FB_ACTIVATE_FORCE;
 		ret = mxc_elcdif_fb_set_par(info);
 		if (ret)
 			return ret;
@@ -1117,7 +1150,10 @@ static int mxc_elcdif_fb_pan_display(struct fb_var_screeninfo *var,
 	base = (var->bits_per_pixel) * base / 8;
 	base += info->fix.smem_start;
 
-	down(&data->flip_sem);
+	if (down_timeout(&data->flip_sem, HZ / 2)) {
+		dev_err(info->device, "timeout when waiting for flip irq\n");
+		return -ETIMEDOUT;
+	}
 
 	__raw_writel(base, elcdif_base + HW_ELCDIF_NEXT_BUF);
 
@@ -1369,7 +1405,7 @@ static int mxc_elcdif_fb_suspend(struct platform_device *pdev,
 	struct mxc_elcdif_fb_data *data = (struct mxc_elcdif_fb_data *)fbi->par;
 	int saved_blank;
 
-	acquire_console_sem();
+	console_lock();
 	fb_set_suspend(fbi, 1);
 	saved_blank = data->cur_blank;
 	mxc_elcdif_fb_blank(FB_BLANK_POWERDOWN, fbi);
@@ -1388,7 +1424,7 @@ static int mxc_elcdif_fb_suspend(struct platform_device *pdev,
 		clk_disable(g_elcdif_axi_clk);
 		g_elcdif_axi_clk_enable = false;
 	}
-	release_console_sem();
+	console_unlock();
 	return 0;
 }
 
@@ -1397,10 +1433,10 @@ static int mxc_elcdif_fb_resume(struct platform_device *pdev)
 	struct fb_info *fbi = platform_get_drvdata(pdev);
 	struct mxc_elcdif_fb_data *data = (struct mxc_elcdif_fb_data *)fbi->par;
 
-	acquire_console_sem();
+	console_lock();
 	mxc_elcdif_fb_blank(data->next_blank, fbi);
 	fb_set_suspend(fbi, 0);
-	release_console_sem();
+	console_unlock();
 
 	return 0;
 }

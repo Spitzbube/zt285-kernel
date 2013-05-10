@@ -24,7 +24,11 @@
 #include <linux/gpio.h>
 #include <linux/regulator/machine.h>
 #include <linux/mfd/pfuze.h>
+#include <linux/io.h>
 #include <mach/irqs.h>
+#include "crm_regs.h"
+#include "regs-anadig.h"
+#include "cpu_op-mx6.h"
 
 /*
  * Convenience conversion.
@@ -39,6 +43,10 @@
 /* 7-bit I2C bus slave address */
 #define PFUZE100_I2C_ADDR         (0x08)
  /*SWBST*/
+#define PFUZE100_SW1AVOL	32
+#define PFUZE100_SW1AVOL_VSEL_M	(0x3f<<0)
+#define PFUZE100_SW1CVOL	46
+#define PFUZE100_SW1CVOL_VSEL_M	(0x3f<<0)
 #define PFUZE100_SW1ASTANDBY	33
 #define PFUZE100_SW1ASTANDBY_STBY_VAL	(0x18)
 #define PFUZE100_SW1ASTANDBY_STBY_M	(0x3f<<0)
@@ -63,7 +71,19 @@
 #define PFUZE100_SWBSTCON1	102
 #define PFUZE100_SWBSTCON1_SWBSTMOD_VAL	(0x1<<2)
 #define PFUZE100_SWBSTCON1_SWBSTMOD_M	(0x3<<2)
+#define PFUZE100_SW1ACON		36
+#define PFUZE100_SW1ACON_SPEED_VAL	(0x1<<6)	/*default */
+#define PFUZE100_SW1ACON_SPEED_M	(0x3<<6)
 
+extern u32 arm_max_freq;
+
+#ifdef CONFIG_MX6_INTER_LDO_BYPASS
+static struct regulator_consumer_supply sw1_consumers[] = {
+	{
+		.supply	   = "VDDCORE",
+	}
+};
+#endif
 
 static struct regulator_consumer_supply sw2_consumers[] = {
 	{
@@ -139,6 +159,11 @@ static struct regulator_init_data sw1a_init = {
 			.boot_on = 1,
 			.always_on = 1,
 			},
+
+	#ifdef CONFIG_MX6_INTER_LDO_BYPASS
+	.num_consumer_supplies = ARRAY_SIZE(sw1_consumers),
+	.consumer_supplies = sw1_consumers,
+	#endif
 };
 
 static struct regulator_init_data sw1b_init = {
@@ -363,19 +388,43 @@ static struct regulator_init_data vgen6_init = {
 static int pfuze100_init(struct mc_pfuze *pfuze)
 {
 	int ret;
+	unsigned int reg;
+	if (arm_max_freq == CPU_AT_1_2GHz) {
+		/*VDDARM_IN 1.425V*/
+		ret = pfuze_reg_rmw(pfuze, PFUZE100_SW1AVOL,
+					PFUZE100_SW1AVOL_VSEL_M,
+					0x2d);
+		if (ret)
+			goto err;
+		/*VDDSOC_IN 1.425V*/
+		ret = pfuze_reg_rmw(pfuze, PFUZE100_SW1CVOL,
+					PFUZE100_SW1CVOL_VSEL_M,
+					0x2d);
+		if (ret)
+			goto err;
+		/*set VDDSOC&VDDPU to 1.25V*/
+		reg = __raw_readl(ANADIG_REG_CORE);
+		reg &= ~BM_ANADIG_REG_CORE_REG2_TRG;
+		reg |= BF_ANADIG_REG_CORE_REG2_TRG(0x16);
+		reg &= ~BM_ANADIG_REG_CORE_REG1_TRG;
+		reg |= BF_ANADIG_REG_CORE_REG1_TRG(0x16);
+		__raw_writel(reg, ANADIG_REG_CORE);
+
+	}
 	ret = pfuze_reg_rmw(pfuze, PFUZE100_SW1ASTANDBY,
 			    PFUZE100_SW1ASTANDBY_STBY_M,
 			    PFUZE100_SW1ASTANDBY_STBY_VAL);
 	if (ret)
 		goto err;
-	ret = pfuze_reg_rmw(pfuze, PFUZE100_SW1BSTANDBY,
-			    PFUZE100_SW1BSTANDBY_STBY_M,
-			    PFUZE100_SW1BSTANDBY_STBY_VAL);
-	if (ret)
-		goto err;
 	ret = pfuze_reg_rmw(pfuze, PFUZE100_SW1CSTANDBY,
 			    PFUZE100_SW1CSTANDBY_STBY_M,
 			    PFUZE100_SW1CSTANDBY_STBY_VAL);
+	if (ret)
+		goto err;
+	/*set SW1ABDVSPEED as 25mV step each 4us,quick than 16us before.*/
+	ret = pfuze_reg_rmw(pfuze, PFUZE100_SW1ACON,
+			    PFUZE100_SW1ACON_SPEED_M,
+			    PFUZE100_SW1ACON_SPEED_VAL);
 	if (ret)
 		goto err;
 	return 0;

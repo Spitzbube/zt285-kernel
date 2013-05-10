@@ -251,11 +251,70 @@ typedef struct __BITFIELDINFO{
 } BITFIELDINFO;
 
 #elif defined(LINUX) && defined(EGL_API_FB) && !defined(__APPLE__)
+
+#if defined(EGL_API_WL)
+/* Wayland platform. */
+#include "wayland-server.h"
+#include <wayland-egl.h>
+
+#define WL_EGL_NUM_BACKBUFFERS 2
+
+typedef struct _gcsWL_VIV_BUFFER
+{
+   struct wl_buffer wl_buffer;
+   gcoSURF surface;
+} gcsWL_VIV_BUFFER;
+
+typedef struct _gcsWL_EGL_DISPLAY
+{
+   struct wl_display* wl_display;
+   struct wl_viv* wl_viv;
+} gcsWL_EGL_DISPLAY;
+
+typedef struct _gcsWL_EGL_BUFFER_INFO
+{
+   gctINT32 width;
+   gctINT32 height;
+   gctINT32 stride;
+   gceSURF_FORMAT format;
+   gcuVIDMEM_NODE_PTR node;
+   gcePOOL pool;
+   gctUINT bytes;
+   gcoSURF surface;
+} gcsWL_EGL_BUFFER_INFO;
+
+typedef struct _gcsWL_EGL_BUFFER
+{
+   struct wl_buffer* wl_buffer;
+   gcsWL_EGL_BUFFER_INFO info;
+} gcsWL_EGL_BUFFER;
+
+typedef struct _gcsWL_EGL_WINDOW_INFO
+{
+   gctUINT width;
+   gctUINT height;
+   gceSURF_FORMAT format;
+   gctUINT bpp;
+} gcsWL_EGL_WINDOW_INFO;
+
+struct wl_egl_window
+{
+   gcsWL_EGL_BUFFER backbuffers[WL_EGL_NUM_BACKBUFFERS];
+   gcsWL_EGL_WINDOW_INFO info;
+   gctUINT current;
+   struct wl_surface* surface;
+   struct wl_callback* pending;
+};
+
+typedef void*   HALNativeDisplayType;
+typedef void*   HALNativeWindowType;
+typedef void*   HALNativePixmapType;
+#else
 /* Linux platform for FBDEV. */
 typedef struct _FBDisplay * HALNativeDisplayType;
 typedef struct _FBWindow *  HALNativeWindowType;
 typedef struct _FBPixmap *  HALNativePixmapType;
-
+#endif
 #elif defined(__ANDROID__) || defined(ANDROID)
 
 struct egl_native_pixmap_t;
@@ -328,13 +387,15 @@ typedef void *  HALNativePixmapType;
 
 gceSTATUS
 gcoOS_GetDisplay(
-    OUT HALNativeDisplayType * Display
+    OUT HALNativeDisplayType * Display,
+    IN gctPOINTER Context
     );
 
 gceSTATUS
 gcoOS_GetDisplayByIndex(
     IN gctINT DisplayIndex,
-    OUT HALNativeDisplayType * Display
+    OUT HALNativeDisplayType * Display,
+    IN gctPOINTER Context
     );
 
 gceSTATUS
@@ -369,6 +430,8 @@ typedef struct _halDISPLAY_INFO
     /* The physical address of the display memory buffer. ~0 is returned
     ** if the address is not known for the specified display. */
     gctSIZE_T               physical;
+
+    gctBOOL                wrapFB;   /* true if compositor, false otherwise. */
 
 #ifndef __QNXNTO__
     /* 355_FB_MULTI_BUFFER */
@@ -449,11 +512,13 @@ gcoOS_DestroyDisplay(
 
 gceSTATUS
 gcoOS_InitLocalDisplayInfo(
+    IN HALNativeDisplayType Display,
     IN OUT gctPOINTER * localDisplay
     );
 
 gceSTATUS
 gcoOS_DeinitLocalDisplayInfo(
+    IN HALNativeDisplayType Display,
     IN OUT gctPOINTER * localDisplay
     );
 
@@ -489,6 +554,10 @@ gcoOS_GetNativeVisualId(
     OUT gctINT* nativeVisualId
     );
 
+gctBOOL
+gcoOS_SynchronousFlip(
+    IN HALNativeDisplayType Display
+    );
 
 /*******************************************************************************
 ** Windows. ********************************************************************

@@ -154,6 +154,7 @@ extern int high_bus_freq_mode;
 extern int set_low_bus_freq(void);
 extern int set_high_bus_freq(int high_bus_speed);
 extern int low_freq_bus_used(void);
+extern struct mutex bus_freq_mutex;
 
 DEFINE_SPINLOCK(mxc_dvfs_core_lock);
 
@@ -427,7 +428,7 @@ static int set_cpu_freq(int op)
 {
 	int ret = 0;
 
-	if (cpu_is_mx6q() || cpu_is_mx6dl())
+	if (cpu_is_mx6())
 		ret = mx6_set_cpu_freq(op);
 	else
 		ret = mx5_set_cpu_freq(op);
@@ -476,7 +477,7 @@ static int start_dvfs(void)
 	/* GPCIRQ=1, select ARM IRQ */
 	reg |= MXC_GPCCNTR_GPCIRQ_ARM;
 	/* ADU=1, select ARM domain */
-	if (!(cpu_is_mx6q() || cpu_is_mx6dl()))
+	if (!cpu_is_mx6())
 		reg |= MXC_GPCCNTR_ADU;
 	__raw_writel(reg, gpc_base + dvfs_data->gpc_cntr_offset);
 
@@ -509,7 +510,7 @@ static int start_dvfs(void)
 	__raw_writel(reg, dvfs_data->membase + MXC_DVFSCORE_CNTR);
 
 	/* Enable DVFS */
-	if (cpu_is_mx6q() || cpu_is_mx6dl()) {
+	if (cpu_is_mx6()) {
 		unsigned long cpu_wfi = 0;
 		int num_cpus = num_possible_cpus();
 		reg = __raw_readl(dvfs_data->membase + MXC_DVFSCORE_EMAC);
@@ -603,8 +604,12 @@ static void dvfs_core_work_handler(struct work_struct *work)
 	if (fsvai == FSVAI_FREQ_DECREASE) {
 		if (curr_cpu <= cpu_op_tbl[cpu_op_nr - 1].cpu_rate) {
 			minf = 1;
-			if (low_bus_freq_mode)
+			mutex_lock(&bus_freq_mutex);
+			if (low_bus_freq_mode) {
+				mutex_unlock(&bus_freq_mutex);
 				goto END;
+			} else
+				mutex_unlock(&bus_freq_mutex);
 		} else {
 			/* freq down */
 			curr_op++;
@@ -621,6 +626,7 @@ static void dvfs_core_work_handler(struct work_struct *work)
 			maxf = 1;
 			goto END;
 		} else {
+			mutex_lock(&bus_freq_mutex);
 			if (!high_bus_freq_mode &&
 				dvfs_config_setpoint == (cpu_op_nr + 1)) {
 				/* bump up LP freq first. */
@@ -633,10 +639,12 @@ static void dvfs_core_work_handler(struct work_struct *work)
 				minf = 0;
 				dvfs_load_config(0);
 			}
+			mutex_unlock(&bus_freq_mutex);
 		}
 	}
 
 	low_freq_bus_ready = low_freq_bus_used();
+	mutex_lock(&bus_freq_mutex);
 	if ((curr_op == cpu_op_nr - 1) && (!low_bus_freq_mode)
 	    && (low_freq_bus_ready) && !bus_incr) {
 		if (!minf)
@@ -648,9 +656,13 @@ static void dvfs_core_work_handler(struct work_struct *work)
 			set_low_bus_freq();
 			dvfs_load_config(cpu_op_nr + 1);
 		}
+		mutex_unlock(&bus_freq_mutex);
 	} else {
-		if (!high_bus_freq_mode)
+		if (!high_bus_freq_mode) {
+			mutex_unlock(&bus_freq_mutex);
 			set_high_bus_freq(1);
+		} else
+			mutex_unlock(&bus_freq_mutex);
 		if (!bus_incr)
 			ret = set_cpu_freq(curr_op);
 		bus_incr = 0;
@@ -722,8 +734,12 @@ void stop_dvfs(void)
 				  + MXC_DVFSCORE_CNTR);
 
 		curr_op = 0;
-		if (!high_bus_freq_mode)
+		mutex_lock(&bus_freq_mutex);
+		if (!high_bus_freq_mode) {
+			mutex_unlock(&bus_freq_mutex);
 			set_high_bus_freq(1);
+		} else
+			mutex_unlock(&bus_freq_mutex);
 
 		curr_cpu = clk_get_rate(cpu_clk);
 		if (curr_cpu != cpu_op_tbl[curr_op].cpu_rate) {
@@ -947,7 +963,7 @@ static int __devinit mxc_dvfs_core_probe(struct platform_device *pdev)
 		printk(KERN_ERR "%s: failed to get cpu clock\n", __func__);
 		return PTR_ERR(cpu_clk);
 	}
-	if (!(cpu_is_mx6q() || cpu_is_mx6dl())) {
+	if (!cpu_is_mx6()) {
 		dvfs_clk = clk_get(NULL, dvfs_data->clk2_id);
 		if (IS_ERR(dvfs_clk)) {
 			printk(KERN_ERR "%s: failed to get dvfs clock\n", __func__);

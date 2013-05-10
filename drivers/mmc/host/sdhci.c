@@ -35,6 +35,11 @@
 #define DBG(f, x...) \
 	pr_debug(DRIVER_NAME " [%s()]: " f, __func__,## x)
 
+#if defined(CONFIG_LEDS_CLASS) || (defined(CONFIG_LEDS_CLASS_MODULE) && \
+	defined(CONFIG_MMC_SDHCI_MODULE))
+/* FIXME: temp workaround for calling clk_enable in an interrupt context */
+#define SDHCI_USE_LEDS_CLASS_BROKEN
+#endif
 
 #define MAX_TUNING_LOOP 40
 
@@ -46,6 +51,9 @@ static void sdhci_send_command(struct sdhci_host *, struct mmc_command *);
 static void sdhci_finish_command(struct sdhci_host *);
 static int sdhci_execute_tuning(struct mmc_host *mmc);
 static void sdhci_tuning_timer(unsigned long data);
+static int sdhci_pre_dma_transfer(struct sdhci_host *host,
+				       struct mmc_data *data,
+				       struct sdhci_host_next *next);
 
 static void sdhci_clk_worker(struct work_struct *work)
 {
@@ -65,6 +73,15 @@ static inline bool sdhci_is_sdio_attached(struct sdhci_host *host)
 	return false;
 }
 
+static bool sdhci_can_gate_clk(struct sdhci_host *host)
+{
+	if (!sdhci_is_sdio_attached(host))
+		return true;
+	if (host->power_mode == MMC_POWER_OFF)
+		return true;
+	return false;
+}
+
 static void sdhci_enable_clk(struct sdhci_host *host)
 {
 	if (host->clk_mgr_en) {
@@ -80,7 +97,7 @@ static void sdhci_enable_clk(struct sdhci_host *host)
 
 static void sdhci_disable_clk(struct sdhci_host *host, int delay)
 {
-	if (host->clk_mgr_en && !sdhci_is_sdio_attached(host)) {
+	if (host->clk_mgr_en && sdhci_can_gate_clk(host)) {
 		if (delay == 0 && !in_interrupt()) {
 			if (host->ops->platform_clk_ctrl && host->clk_status)
 				host->ops->platform_clk_ctrl(host, false);
@@ -498,9 +515,8 @@ static int sdhci_adma_table_pre(struct sdhci_host *host,
 		goto fail;
 	BUG_ON(host->align_addr & 0x3);
 
-	host->sg_count = dma_map_sg(mmc_dev(host->mmc),
-		data->sg, data->sg_len, direction);
-	if (host->sg_count == 0)
+	host->sg_count = sdhci_pre_dma_transfer(host, data, NULL);
+	if (host->sg_count < 0)
 		goto unmap_align;
 
 	desc = host->adma_desc;
@@ -640,8 +656,9 @@ static void sdhci_adma_table_post(struct sdhci_host *host,
 		}
 	}
 
-	dma_unmap_sg(mmc_dev(host->mmc), data->sg,
-		data->sg_len, direction);
+	if (!data->host_cookie)
+		dma_unmap_sg(mmc_dev(host->mmc), data->sg,
+			data->sg_len, direction);
 }
 
 static u8 sdhci_calc_timeout(struct sdhci_host *host, struct mmc_command *cmd)
@@ -823,11 +840,7 @@ static void sdhci_prepare_data(struct sdhci_host *host, struct mmc_command *cmd)
 		} else {
 			int sg_cnt;
 
-			sg_cnt = dma_map_sg(mmc_dev(host->mmc),
-					data->sg, data->sg_len,
-					(data->flags & MMC_DATA_READ) ?
-						DMA_FROM_DEVICE :
-						DMA_TO_DEVICE);
+			sg_cnt = sdhci_pre_dma_transfer(host, data, NULL);
 			if (sg_cnt == 0) {
 				/*
 				 * This only happens when someone fed
@@ -926,8 +939,10 @@ static void sdhci_finish_data(struct sdhci_host *host)
 		if (host->flags & SDHCI_USE_ADMA)
 			sdhci_adma_table_post(host, data);
 		else {
-			dma_unmap_sg(mmc_dev(host->mmc), data->sg,
-				data->sg_len, (data->flags & MMC_DATA_READ) ?
+			if (!data->host_cookie)
+				dma_unmap_sg(mmc_dev(host->mmc),
+					data->sg, data->sg_len,
+					(data->flags & MMC_DATA_READ) ?
 					DMA_FROM_DEVICE : DMA_TO_DEVICE);
 		}
 	}
@@ -1241,7 +1256,7 @@ static void sdhci_set_power(struct sdhci_host *host, unsigned short power)
  *                                                                           *
 \*****************************************************************************/
 
-static void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)
+void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 {
 	struct sdhci_host *host;
 	bool present;
@@ -1318,24 +1333,14 @@ static void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 
 	host = mmc_priv(mmc);
 
+	host->power_mode = ios->power_mode;
+
 	sdhci_enable_clk(host);
 	spin_lock_irqsave(&host->lock, flags);
 
 	if (host->flags & SDHCI_DEVICE_DEAD)
 		goto out;
 
-	if (ios->finish_tuning_flag) {
-		if (host->ops->post_tuning)
-			host->ops->post_tuning(host);
-		goto out;
-	}
-
-	if (ios->tuning_flag) {
-		/* means this request is for tuning only */
-		if (host->ops->pre_tuning)
-			host->ops->pre_tuning(host, ios->tuning);
-		goto out;
-	}
 	/*
 	 * Reset the chip on each power off.
 	 * Should clear out any weird states.
@@ -1396,8 +1401,7 @@ static void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		if ((ios->timing == MMC_TIMING_UHS_SDR50) ||
 		    (ios->timing == MMC_TIMING_UHS_SDR104) ||
 		    (ios->timing == MMC_TIMING_UHS_DDR50) ||
-		    (ios->timing == MMC_TIMING_UHS_SDR25) ||
-		    (ios->timing == MMC_TIMING_UHS_SDR12))
+		    (ios->timing == MMC_TIMING_UHS_SDR25))
 			ctrl |= SDHCI_CTRL_HISPD;
 
 		ctrl_2 = sdhci_readw(host, SDHCI_HOST_CONTROL2);
@@ -1472,7 +1476,7 @@ static void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	 * signalling timeout and CRC errors even on CMD0. Resetting
 	 * it on each ios seems to solve the problem.
 	 */
-	if(host->quirks & SDHCI_QUIRK_RESET_CMD_DATA_ON_IOS)
+	if (host->quirks & SDHCI_QUIRK_RESET_CMD_DATA_ON_IOS)
 		sdhci_reset(host, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
 
 out:
@@ -1686,6 +1690,14 @@ static int sdhci_execute_tuning(struct mmc_host *mmc)
 		return 0;
 	}
 
+	if (ctrl & SDHCI_CTRL_EXEC_TUNING) {
+		if (host->ops->platform_execute_tuning) {
+			spin_unlock(&host->lock);
+			enable_irq(host->irq);
+			return host->ops->platform_execute_tuning(host);
+		}
+	}
+
 	sdhci_writew(host, ctrl, SDHCI_HOST_CONTROL2);
 
 	/*
@@ -1868,10 +1880,11 @@ static void sdhci_post_req(struct mmc_host *mmc, struct mmc_request *mrq,
 	struct mmc_data *data = mrq->data;
 
 	if (host->flags & SDHCI_REQ_USE_DMA) {
-		dma_unmap_sg(mmc_dev(host->mmc), data->sg, data->sg_len,
-			     data->flags & MMC_DATA_WRITE ? \
-			     DMA_TO_DEVICE : DMA_FROM_DEVICE);
-		data->host_cookie = 0;
+		if (data->host_cookie)
+			dma_unmap_sg(mmc_dev(host->mmc), data->sg, data->sg_len,
+					 data->flags & MMC_DATA_WRITE ? \
+					 DMA_TO_DEVICE : DMA_FROM_DEVICE);
+		mrq->data->host_cookie = 0;
 	}
 }
 
@@ -1879,11 +1892,11 @@ static int sdhci_pre_dma_transfer(struct sdhci_host *host,
 				       struct mmc_data *data,
 				       struct sdhci_host_next *next)
 {
-	int dma_len;
+	int sg_count;
 
 	if (!next && data->host_cookie &&
 	    data->host_cookie != host->next_data.cookie) {
-		printk(KERN_WARNING "[%s] invalid cookie: data->host_cookie %d"
+		printk(KERN_DEBUG "[%s] invalid cookie: data->host_cookie %d"
 		       " host->next_data.cookie %d\n",
 		       __func__, data->host_cookie, host->next_data.cookie);
 		data->host_cookie = 0;
@@ -1892,26 +1905,27 @@ static int sdhci_pre_dma_transfer(struct sdhci_host *host,
 	/* Check if next job is already prepared */
 	if (next ||
 	    (!next && data->host_cookie != host->next_data.cookie)) {
-		dma_len = dma_map_sg(mmc_dev(host->mmc), data->sg,
+		sg_count = dma_map_sg(mmc_dev(host->mmc), data->sg,
 				     data->sg_len,
 				     data->flags & MMC_DATA_WRITE ? \
 				     DMA_TO_DEVICE : DMA_FROM_DEVICE);
 
 	} else {
-		dma_len = host->next_data.dma_len;
-		host->next_data.dma_len = 0;
+		sg_count = host->next_data.sg_count;
+		host->next_data.sg_count = 0;
 	}
 
 
-	if (dma_len == 0)
+	if (sg_count == 0)
 		return -EINVAL;
 
 	if (next) {
-		next->dma_len = dma_len;
+		next->sg_count = sg_count;
 		data->host_cookie = ++next->cookie < 0 ? 1 : next->cookie;
-	}
+	} else
+		host->sg_count = sg_count;
 
-	return 0;
+	return sg_count;
 }
 
 static void sdhci_pre_req(struct mmc_host *mmc, struct mmc_request *mrq,
@@ -1925,8 +1939,9 @@ static void sdhci_pre_req(struct mmc_host *mmc, struct mmc_request *mrq,
 	}
 
 	if (host->flags & SDHCI_REQ_USE_DMA)
-		if (sdhci_pre_dma_transfer(host, mrq->data,
-						&host->next_data))
+		if (sdhci_pre_dma_transfer(host,
+					mrq->data,
+					&host->next_data) < 0)
 			mrq->data->host_cookie = 0;
 }
 
@@ -2365,9 +2380,8 @@ int sdhci_suspend_host(struct sdhci_host *host, pm_message_t state)
 	/* Disable tuning since we are suspending */
 	if (host->version >= SDHCI_SPEC_300 && host->tuning_count &&
 	    host->tuning_mode == SDHCI_TUNING_MODE_1) {
+		del_timer_sync(&host->tuning_timer);
 		host->flags &= ~SDHCI_NEEDS_RETUNING;
-		mod_timer(&host->tuning_timer, jiffies +
-			host->tuning_count * HZ);
 	}
 
 	ret = mmc_suspend_host(host->mmc);
@@ -2613,6 +2627,7 @@ int sdhci_add_host(struct sdhci_host *host)
 	if (caps[0] & SDHCI_TIMEOUT_CLK_UNIT)
 		host->timeout_clk *= 1000;
 
+	host->next_data.cookie = 1;
 	/*
 	 * In case of Host Controller v3.00, find out whether clock
 	 * multiplier is supported.

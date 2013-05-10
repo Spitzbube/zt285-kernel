@@ -39,6 +39,7 @@ struct dp_csc_param_t {
 };
 
 #define SYNC_WAVE 0
+#define NULL_WAVE (-1)
 #define ASYNC_SER_WAVE 6
 
 /* DC display ID assignments */
@@ -174,44 +175,68 @@ static int _ipu_pixel_clk_set_parent(struct clk *clk, struct clk *parent)
 #else
 #define __INIT_CLK_DEBUG(n)
 #endif
-struct clk ipu_pixel_clk[] = {
+struct clk ipu_pixel_clk[MXC_IPU_MAX_NUM][MXC_DI_NUM_PER_IPU] = {
 	{
-		__INIT_CLK_DEBUG(pixel_clk_0)
-			.id = 0,
-		.get_rate = _ipu_pixel_clk_get_rate,
-		.set_rate = _ipu_pixel_clk_set_rate,
-		.round_rate = _ipu_pixel_clk_round_rate,
-		.set_parent = _ipu_pixel_clk_set_parent,
-		.enable = _ipu_pixel_clk_enable,
-		.disable = _ipu_pixel_clk_disable,
+		{
+		 __INIT_CLK_DEBUG(ipu1_pixel_clk_0)
+		 .id = 0,
+		 .get_rate = _ipu_pixel_clk_get_rate,
+		 .set_rate = _ipu_pixel_clk_set_rate,
+		 .round_rate = _ipu_pixel_clk_round_rate,
+		 .set_parent = _ipu_pixel_clk_set_parent,
+		 .enable = _ipu_pixel_clk_enable,
+		 .disable = _ipu_pixel_clk_disable,
+		},
+		{
+		 __INIT_CLK_DEBUG(ipu1_pixel_clk_1)
+		 .id = 1,
+		 .get_rate = _ipu_pixel_clk_get_rate,
+		 .set_rate = _ipu_pixel_clk_set_rate,
+		 .round_rate = _ipu_pixel_clk_round_rate,
+		 .set_parent = _ipu_pixel_clk_set_parent,
+		 .enable = _ipu_pixel_clk_enable,
+		 .disable = _ipu_pixel_clk_disable,
+		},
 	},
 	{
-		__INIT_CLK_DEBUG(pixel_clk_1)
-			.id = 1,
-		.get_rate = _ipu_pixel_clk_get_rate,
-		.set_rate = _ipu_pixel_clk_set_rate,
-		.round_rate = _ipu_pixel_clk_round_rate,
-		.set_parent = _ipu_pixel_clk_set_parent,
-		.enable = _ipu_pixel_clk_enable,
-		.disable = _ipu_pixel_clk_disable,
+		{
+		 __INIT_CLK_DEBUG(ipu2_pixel_clk_0)
+		 .id = 0,
+		 .get_rate = _ipu_pixel_clk_get_rate,
+		 .set_rate = _ipu_pixel_clk_set_rate,
+		 .round_rate = _ipu_pixel_clk_round_rate,
+		 .set_parent = _ipu_pixel_clk_set_parent,
+		 .enable = _ipu_pixel_clk_enable,
+		 .disable = _ipu_pixel_clk_disable,
+		},
+		{
+		 __INIT_CLK_DEBUG(ipu2_pixel_clk_1)
+		 .id = 1,
+		 .get_rate = _ipu_pixel_clk_get_rate,
+		 .set_rate = _ipu_pixel_clk_set_rate,
+		 .round_rate = _ipu_pixel_clk_round_rate,
+		 .set_parent = _ipu_pixel_clk_set_parent,
+		 .enable = _ipu_pixel_clk_enable,
+		 .disable = _ipu_pixel_clk_disable,
+		},
 	},
 };
 
-struct clk_lookup ipu_lookups[MXC_IPU_MAX_NUM][2] = {
+struct clk_lookup ipu_lookups[MXC_IPU_MAX_NUM][MXC_DI_NUM_PER_IPU] = {
 	{
 		{
-			.con_id = "pixel_clk_0",
+			.con_id = "ipu1_pixel_clk_0",
 		},
 		{
-			.con_id = "pixel_clk_1",
+			.con_id = "ipu1_pixel_clk_1",
 		},
 	},
 	{
 		{
-			.con_id = "pixel_clk_0",
+			.con_id = "ipu2_pixel_clk_0",
 		},
 		{
-			.con_id = "pixel_clk_1",
+			.con_id = "ipu2_pixel_clk_1",
 		},
 	},
 };
@@ -769,7 +794,7 @@ void _ipu_dc_init(struct ipu_soc *ipu, int dc_chan, int di, bool interlaced, uin
 			if (di) {
 				_ipu_dc_link_event(ipu, dc_chan, DC_EVT_NL, 2, 3);
 				_ipu_dc_link_event(ipu, dc_chan, DC_EVT_EOL, 3, 2);
-				_ipu_dc_link_event(ipu, dc_chan, DC_EVT_NEW_DATA, 4, 1);
+				_ipu_dc_link_event(ipu, dc_chan, DC_EVT_NEW_DATA, 1, 1);
 				if ((pixel_fmt == IPU_PIX_FMT_YUYV) ||
 				(pixel_fmt == IPU_PIX_FMT_UYVY) ||
 				(pixel_fmt == IPU_PIX_FMT_YVYU) ||
@@ -780,7 +805,7 @@ void _ipu_dc_init(struct ipu_soc *ipu, int dc_chan, int di, bool interlaced, uin
 			} else {
 				_ipu_dc_link_event(ipu, dc_chan, DC_EVT_NL, 5, 3);
 				_ipu_dc_link_event(ipu, dc_chan, DC_EVT_EOL, 6, 2);
-				_ipu_dc_link_event(ipu, dc_chan, DC_EVT_NEW_DATA, 7, 1);
+				_ipu_dc_link_event(ipu, dc_chan, DC_EVT_NEW_DATA, 12, 1);
 				if ((pixel_fmt == IPU_PIX_FMT_YUYV) ||
 				(pixel_fmt == IPU_PIX_FMT_UYVY) ||
 				(pixel_fmt == IPU_PIX_FMT_YVYU) ||
@@ -884,6 +909,9 @@ void _ipu_dp_dc_enable(struct ipu_soc *ipu, ipu_channel_t channel)
 		reg = ipu_cm_read(ipu, IPU_SRM_PRI2) | 0x8;
 		ipu_cm_write(ipu, reg, IPU_SRM_PRI2);
 		return;
+	} else if (channel == MEM_BG_SYNC) {
+		reg = ipu_cm_read(ipu, IPU_SRM_PRI2) | 0x8;
+		ipu_cm_write(ipu, reg, IPU_SRM_PRI2);
 	}
 
 	di = ipu->dc_di_assignment[dc_chan];
@@ -1247,26 +1275,21 @@ int32_t ipu_init_sync_panel(struct ipu_soc *ipu, int disp, uint32_t pixel_clk,
 			((rounded_pixel_clk >= pixel_clk + pixel_clk/200) ||
 			(rounded_pixel_clk <= pixel_clk - pixel_clk/200))) {
 			dev_dbg(ipu->dev, "try ipu ext di clk\n");
-			if (clk_get_usecount(di_parent))
-				dev_warn(ipu->dev,
-					"ext di clk already in use, go back to internal clk\n");
-			else {
-				rounded_pixel_clk = pixel_clk * 2;
-				rounded_parent_clk = clk_round_rate(di_parent,
-							rounded_pixel_clk);
-				while (rounded_pixel_clk < rounded_parent_clk) {
-					/* the max divider from parent to di is 8 */
-					if (rounded_parent_clk / pixel_clk < 8)
-						rounded_pixel_clk += pixel_clk * 2;
-					else
-						rounded_pixel_clk *= 2;
-				}
-				clk_set_rate(di_parent, rounded_pixel_clk);
-				rounded_pixel_clk =
-					clk_round_rate(ipu->di_clk[disp], pixel_clk);
-				clk_set_rate(ipu->di_clk[disp], rounded_pixel_clk);
-				clk_set_parent(&ipu->pixel_clk[disp], ipu->di_clk[disp]);
+			rounded_pixel_clk = pixel_clk * 2;
+			rounded_parent_clk = clk_round_rate(di_parent,
+						rounded_pixel_clk);
+			while (rounded_pixel_clk < rounded_parent_clk) {
+				/* the max divider from parent to di is 8 */
+				if (rounded_parent_clk / pixel_clk < 8)
+					rounded_pixel_clk += pixel_clk * 2;
+				else
+					rounded_pixel_clk *= 2;
 			}
+			clk_set_rate(di_parent, rounded_pixel_clk);
+			rounded_pixel_clk =
+				clk_round_rate(ipu->di_clk[disp], pixel_clk);
+			clk_set_rate(ipu->di_clk[disp], rounded_pixel_clk);
+			clk_set_parent(&ipu->pixel_clk[disp], ipu->di_clk[disp]);
 		}
 	}
 	rounded_pixel_clk = clk_round_rate(&ipu->pixel_clk[disp], pixel_clk);
@@ -1618,8 +1641,10 @@ int32_t ipu_init_sync_panel(struct ipu_soc *ipu, int disp, uint32_t pixel_clk,
 				ipu_dc_write(ipu, (width - 1), DC_UGDE_3(disp));
 			}
 			_ipu_dc_write_tmpl(ipu, 2, WROD(0), 0, map, SYNC_WAVE, 8, 5, 1);
-			_ipu_dc_write_tmpl(ipu, 3, WRG, 0, map, SYNC_WAVE, 4, 5, 1);
-			_ipu_dc_write_tmpl(ipu, 4, WROD(0), 0, map, SYNC_WAVE, 0, 5, 1);
+			_ipu_dc_write_tmpl(ipu, 3, WROD(0), 0, map, SYNC_WAVE, 4, 5, 0);
+			_ipu_dc_write_tmpl(ipu, 4, WRG, 0, map, NULL_WAVE, 0, 0, 1);
+			_ipu_dc_write_tmpl(ipu, 1, WROD(0), 0, map, SYNC_WAVE, 0, 5, 1);
+
 		} else {
 			if ((pixel_fmt == IPU_PIX_FMT_YUYV) ||
 				(pixel_fmt == IPU_PIX_FMT_UYVY) ||
@@ -1631,8 +1656,9 @@ int32_t ipu_init_sync_panel(struct ipu_soc *ipu, int disp, uint32_t pixel_clk,
 				ipu_dc_write(ipu, width - 1, DC_UGDE_3(disp));
 			}
 		   _ipu_dc_write_tmpl(ipu, 5, WROD(0), 0, map, SYNC_WAVE, 8, 5, 1);
-		   _ipu_dc_write_tmpl(ipu, 6, WRG, 0, map, SYNC_WAVE, 4, 5, 1);
-		   _ipu_dc_write_tmpl(ipu, 7, WROD(0), 0, map, SYNC_WAVE, 0, 5, 1);
+		   _ipu_dc_write_tmpl(ipu, 6, WROD(0), 0, map, SYNC_WAVE, 4, 5, 0);
+		   _ipu_dc_write_tmpl(ipu, 7, WRG, 0, map, NULL_WAVE, 0, 0, 1);
+		   _ipu_dc_write_tmpl(ipu, 12, WROD(0), 0, map, SYNC_WAVE, 0, 5, 1);
 		}
 
 		if (sig.Hsync_pol) {

@@ -71,17 +71,14 @@
 #define FEC_QUIRK_SWAP_FRAME		(1 << 1)
 
 static struct platform_device_id fec_devtype[] = {
-#ifdef CONFIG_SOC_IMX6Q
 	{
-		.name = DRIVER_NAME,
+		.name = "enet",
 		.driver_data = FEC_QUIRK_ENET_MAC,
 	},
-#else
 	{
-		.name = DRIVER_NAME,
+		.name = "fec",
 		.driver_data = 0,
 	},
-#endif
 	{
 		.name = "imx28-fec",
 		.driver_data = FEC_QUIRK_ENET_MAC | FEC_QUIRK_SWAP_FRAME,
@@ -146,12 +143,11 @@ MODULE_PARM_DESC(macaddr, "FEC Ethernet MAC address");
 #define FEC_ENET_MII_CLK       ((uint)2500000)
 #define FEC_ENET_HOLD_TIME     ((uint)0x100)  /* 2 internal clock cycle*/
 
-#if defined(CONFIG_FEC_1588) && (defined(CONFIG_ARCH_MX28) || \
-				defined(CONFIG_ARCH_MX6))
-#define FEC_DEFAULT_IMASK (FEC_ENET_TXF | FEC_ENET_RXF | FEC_ENET_MII | \
-				FEC_ENET_TS_AVAIL | FEC_ENET_TS_TIMER)
-#else
 #define FEC_DEFAULT_IMASK (FEC_ENET_TXF | FEC_ENET_RXF | FEC_ENET_MII)
+#if defined(CONFIG_FEC_1588)
+#define FEC_1588_IMASK	  (FEC_ENET_TS_AVAIL | FEC_ENET_TS_TIMER)
+#else
+#define FEC_1588_IMASK	0
 #endif
 
 /* The FEC stores dest/src/type, data, and checksum for receive packets.
@@ -160,6 +156,13 @@ MODULE_PARM_DESC(macaddr, "FEC Ethernet MAC address");
 #define PKT_MINBUF_SIZE		64
 #define PKT_MAXBLR_SIZE		1520
 
+/* Pause frame feild and FIFO threshold */
+#define FEC_ENET_FCE		(1 << 5)
+#define FEC_ENET_RSEM_V		0x84
+#define FEC_ENET_RSFL_V		16
+#define FEC_ENET_RAEM_V		0x8
+#define FEC_ENET_RAFL_V		0x8
+#define FEC_ENET_OPD_V		0xFFF0
 
 /*
  * The 5270/5271/5280/5282/532x RX control register also contains maximum frame
@@ -1032,7 +1035,7 @@ static int fec_enet_mii_probe(struct net_device *ndev)
 	}
 
 	/* mask with MAC supported features */
-	if (cpu_is_mx6())
+	if (cpu_is_mx6q() || cpu_is_mx6dl())
 		phy_dev->supported &= PHY_GBIT_FEATURES;
 	else
 		phy_dev->supported &= PHY_BASIC_FEATURES;
@@ -1091,7 +1094,7 @@ static int fec_enet_mii_init(struct platform_device *pdev)
 					(FEC_ENET_MII_CLK << 2)) << 1;
 
 	/* set hold time to 2 internal clock cycle */
-	if (cpu_is_mx6())
+	if (cpu_is_mx6q() || cpu_is_mx6dl())
 		fep->phy_speed |= FEC_ENET_HOLD_TIME;
 
 	writel(fep->phy_speed, fep->hwp + FEC_MII_SPEED);
@@ -1453,6 +1456,28 @@ static const struct net_device_ops fec_netdev_ops = {
 #endif
 };
 
+/* Init TX buffer descriptors
+ */
+static void fec_enet_txbd_init(struct net_device *dev)
+{
+	struct fec_enet_private *fep = netdev_priv(dev);
+	struct bufdesc *bdp;
+	int i;
+
+	/* ...and the same for transmit */
+	bdp = fep->tx_bd_base;
+	for (i = 0; i < TX_RING_SIZE; i++) {
+
+		/* Initialize the BD for every fragment in the page. */
+		bdp->cbd_sc = 0;
+		bdp++;
+	}
+
+	/* Set the last buffer to wrap */
+	bdp--;
+	bdp->cbd_sc |= BD_SC_WRAP;
+}
+
  /*
   * XXX:  We need to clean up on failure exits here.
   *
@@ -1509,19 +1534,8 @@ static int fec_enet_init(struct net_device *ndev)
 	bdp--;
 	bdp->cbd_sc |= BD_SC_WRAP;
 
-	/* ...and the same for transmit */
-	bdp = fep->tx_bd_base;
-	for (i = 0; i < TX_RING_SIZE; i++) {
-
-		/* Initialize the BD for every fragment in the page. */
-		bdp->cbd_sc = 0;
-		bdp->cbd_bufaddr = 0;
-		bdp++;
-	}
-
-	/* Set the last buffer to wrap */
-	bdp--;
-	bdp->cbd_sc |= BD_SC_WRAP;
+	/* Init transmit descriptors */
+	fec_enet_txbd_init(ndev);
 
 	fec_restart(ndev, 0);
 
@@ -1545,15 +1559,14 @@ fec_restart(struct net_device *dev, int duplex)
 	writel(1, fep->hwp + FEC_ECNTRL);
 	udelay(10);
 
-	/*
-	 * enet-mac reset will reset mac address registers too,
-	 * so need to reconfigure it.
+	/* if uboot don't set MAC address, get MAC address
+	 * from command line; if command line don't set MAC
+	 * address, get from OCOTP; otherwise, allocate random
+	 * address.
 	 */
-	if (id_entry->driver_data & FEC_QUIRK_ENET_MAC) {
-		memcpy(&temp_mac, dev->dev_addr, ETH_ALEN);
-		writel(cpu_to_be32(temp_mac[0]), fep->hwp + FEC_ADDR_LOW);
-		writel(cpu_to_be32(temp_mac[1]), fep->hwp + FEC_ADDR_HIGH);
-	}
+	memcpy(&temp_mac, dev->dev_addr, ETH_ALEN);
+	writel(cpu_to_be32(temp_mac[0]), fep->hwp + FEC_ADDR_LOW);
+	writel(cpu_to_be32(temp_mac[1]), fep->hwp + FEC_ADDR_HIGH);
 
 	/* Clear any outstanding interrupt. */
 	writel(0xffc00000, fep->hwp + FEC_IEVENT);
@@ -1573,6 +1586,8 @@ fec_restart(struct net_device *dev, int duplex)
 	writel(fep->bd_dma, fep->hwp + FEC_R_DES_START);
 	writel((unsigned long)fep->bd_dma + sizeof(struct bufdesc) * RX_RING_SIZE,
 			fep->hwp + FEC_X_DES_START);
+	/* Reinit transmit descriptors */
+	fec_enet_txbd_init(dev);
 
 	fep->dirty_tx = fep->cur_tx = fep->tx_bd_base;
 	fep->cur_rx = fep->rx_bd_base;
@@ -1622,24 +1637,35 @@ fec_restart(struct net_device *dev, int duplex)
 		else
 			val |= (1 << 9);
 
-		writel(val, fep->hwp + FEC_R_CNTRL);
+		/* Enable pause frame
+		 * ENET pause frame has two issues as ticket TKT116501
+		 * The issues have been fixed on Rigel TO1.1 and Arik TO1.2
+		 */
+		if ((cpu_is_mx6q() &&
+			(mx6q_revision() >= IMX_CHIP_REVISION_1_2)) ||
+			(cpu_is_mx6dl() &&
+			(mx6dl_revision() >= IMX_CHIP_REVISION_1_1)))
+			val |= FEC_ENET_FCE;
 
-		if (fep->ptimer_present) {
-			/* Set Timer count */
-			ret = fec_ptp_start(fep->ptp_priv);
-			if (ret) {
-				fep->ptimer_present = 0;
-				reg = 0x0;
-			} else
+		writel(val, fep->hwp + FEC_R_CNTRL);
+	}
+
+	if (fep->ptimer_present) {
+		/* Set Timer count */
+		ret = fec_ptp_start(fep->ptp_priv);
+		if (ret) {
+			fep->ptimer_present = 0;
+			reg = 0x0;
+		} else
 #if defined(CONFIG_SOC_IMX28) || defined(CONFIG_ARCH_MX6)
-				reg = 0x00000010;
+			reg = 0x00000010;
 #else
-				reg = 0x0;
+			reg = 0x0;
 #endif
 	} else
 		reg = 0x0;
 
-#ifdef FEC_MIIGSK_ENR
+	if (cpu_is_mx25() || cpu_is_mx53() || cpu_is_mx6sl()) {
 		if (fep->phy_interface == PHY_INTERFACE_MODE_RMII) {
 			/* disable the gasket and wait */
 			writel(0, fep->hwp + FEC_MIIGSK_ENR);
@@ -1654,8 +1680,14 @@ fec_restart(struct net_device *dev, int duplex)
 
 			/* re-enable the gasket */
 			writel(2, fep->hwp + FEC_MIIGSK_ENR);
+			udelay(10);
+			if (!(readl(fep->hwp + FEC_MIIGSK_ENR) & 4)) {
+				udelay(100);
+				if (!(readl(fep->hwp + FEC_MIIGSK_ENR) & 4))
+					dev_err(&fep->pdev->dev,
+						"switch to RMII failed!\n");
+			}
 		}
-#endif
 	}
 
 	/* ENET enable */
@@ -1668,7 +1700,24 @@ fec_restart(struct net_device *dev, int duplex)
 		fep->phy_dev->speed == SPEED_1000)
 		val |= (0x1 << 5);
 
-	if (cpu_is_mx6()) {
+	/* RX FIFO threshold setting for ENET pause frame feature
+	 * Only set the parameters after ticket TKT116501 fixed.
+	 * The issue has been fixed on Rigel TO1.1 and Arik TO1.2
+	 */
+	if ((cpu_is_mx6q() &&
+		(mx6q_revision() >= IMX_CHIP_REVISION_1_2)) ||
+		(cpu_is_mx6dl() &&
+		(mx6dl_revision() >= IMX_CHIP_REVISION_1_1))) {
+		writel(FEC_ENET_RSEM_V, fep->hwp + FEC_R_FIFO_RSEM);
+		writel(FEC_ENET_RSFL_V, fep->hwp + FEC_R_FIFO_RSFL);
+		writel(FEC_ENET_RAEM_V, fep->hwp + FEC_R_FIFO_RAEM);
+		writel(FEC_ENET_RAFL_V, fep->hwp + FEC_R_FIFO_RAFL);
+
+		/* OPD */
+		writel(FEC_ENET_OPD_V, fep->hwp + FEC_OPD);
+	}
+
+	if (cpu_is_mx6q() || cpu_is_mx6dl()) {
 		/* enable endian swap */
 		val |= (0x1 << 8);
 		/* enable ENET store and forward mode */
@@ -1679,7 +1728,11 @@ fec_restart(struct net_device *dev, int duplex)
 	writel(0, fep->hwp + FEC_R_DES_ACTIVE);
 
 	/* Enable interrupts we wish to service */
-	writel(FEC_DEFAULT_IMASK, fep->hwp + FEC_IMASK);
+	if (cpu_is_mx6q() || cpu_is_mx6dl() || cpu_is_mx2() || cpu_is_mx3())
+		val = (FEC_1588_IMASK | FEC_DEFAULT_IMASK);
+	else
+		val = FEC_DEFAULT_IMASK;
+	writel(val, fep->hwp + FEC_IMASK);
 }
 
 static void
@@ -1699,7 +1752,7 @@ fec_stop(struct net_device *dev)
 	writel(1, fep->hwp + FEC_ECNTRL);
 	udelay(10);
 
-	if (cpu_is_mx6())
+	if (cpu_is_mx6q() || cpu_is_mx6dl())
 		/* FIXME: we have to enable enet to keep mii interrupt works. */
 		writel(2, fep->hwp + FEC_ECNTRL);
 
@@ -1707,6 +1760,8 @@ fec_stop(struct net_device *dev)
 	if (fep->ptimer_present)
 		fec_ptp_stop(fep->ptp_priv);
 	writel(FEC_DEFAULT_IMASK, fep->hwp + FEC_IMASK);
+	netif_stop_queue(dev);
+	fep->link = 0;
 }
 
 static int __devinit

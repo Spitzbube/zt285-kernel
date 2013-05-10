@@ -344,8 +344,8 @@ gckVGHARDWARE_Construct(
         hardware->idleSignal            = gcvNULL;
         hardware->chipPowerState        = gcvPOWER_OFF;
         hardware->chipPowerStateGlobal  = gcvPOWER_ON;
-        hardware->clockState            = gcvTRUE;
-        hardware->powerState            = gcvTRUE;
+        hardware->clockState            = gcvFALSE;
+        hardware->powerState            = gcvFALSE;
         hardware->powerOffTimeout       = gcdPOWEROFF_TIMEOUT;
         hardware->powerOffTime          = 0;
         hardware->timeIdleThread        = gcvNULL;
@@ -1476,7 +1476,7 @@ static gceSTATUS _CommandStall(
         gcmkERR_BREAK(gckOS_WaitSignal(
             command->os,
             command->powerStallSignal,
-            gcvINFINITE));
+            gcdGPU_TIMEOUT));
 
 
     }
@@ -1750,7 +1750,7 @@ gckVGHARDWARE_SetPowerManagementState(
     if (flag & (gcvPOWER_FLAG_INITIALIZE | gcvPOWER_FLAG_CLOCK_ON))
     {
         /* Turn on the power. */
-        gcmkONERROR(gckOS_SetGPUPower(os, gcvCORE_VG , gcvTRUE, gcvTRUE));
+        gcmkONERROR(gckOS_SetGPUPower(os, gcvCORE_VG, gcvTRUE, gcvTRUE));
 
         /* Mark clock and power as enabled. */
         Hardware->clockState = gcvTRUE;

@@ -109,12 +109,16 @@ int pfuze_reg_write(struct mc_pfuze *mc_pfuze, unsigned int offset,
 		    unsigned char val)
 {
 	unsigned char buf[2];
-	int ret;
+	int ret, i;
 
 	buf[0] = (unsigned char)offset;
 	memcpy(&buf[1], &val, 1);
-
-	ret = i2c_master_send(mc_pfuze->i2c_client, buf, 2);
+	for (i = 0; i < PFUZE_I2C_RETRY_TIMES; i++) {
+		ret = i2c_master_send(mc_pfuze->i2c_client, buf, 2);
+		if (ret == 2)
+			break;
+		msleep(1);
+	}
 	if (ret != 2) {
 		dev_err(&mc_pfuze->i2c_client->dev, "write failed!:%i\n", ret);
 		return ret;
@@ -501,9 +505,10 @@ static int pfuze_probe(struct i2c_client *client,
 		if (ret)
 			goto err_mask;
 	}
-	ret = request_threaded_irq(client->irq, NULL, pfuze_irq_thread,
-				   IRQF_ONESHOT | IRQF_TRIGGER_LOW, "pfuze",
-				   mc_pfuze);
+	if (client->irq)
+		ret = request_threaded_irq(client->irq, NULL, pfuze_irq_thread,
+					IRQF_ONESHOT | IRQF_TRIGGER_LOW, "pfuze",
+					mc_pfuze);
 	if (ret) {
 	      err_mask:
 	      err_revision:

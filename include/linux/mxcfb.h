@@ -69,6 +69,8 @@ struct mxcfb_rect {
 
 #define GRAYSCALE_8BIT				0x1
 #define GRAYSCALE_8BIT_INVERTED			0x2
+#define GRAYSCALE_4BIT                          0x3
+#define GRAYSCALE_4BIT_INVERTED                 0x4
 
 #define AUTO_UPDATE_MODE_REGION_MODE		0
 #define AUTO_UPDATE_MODE_AUTOMATIC_MODE		1
@@ -140,6 +142,7 @@ struct mxcfb_waveform_modes {
 #define MXCFB_GET_DIFMT	       _IOR('F', 0x2A, u_int32_t)
 #define MXCFB_GET_FB_BLANK     _IOR('F', 0x2B, u_int32_t)
 #define MXCFB_SET_DIFMT		_IOW('F', 0x2C, u_int32_t)
+#define MXCFB_ENABLE_VSYNC_EVENT	_IOW('F', 0x33, int32_t)
 
 /* IOCTLs for E-ink panel updates */
 #define MXCFB_SET_WAVEFORM_MODES	_IOW('F', 0x2B, struct mxcfb_waveform_modes)

@@ -3159,9 +3159,6 @@ static int wm8962_hw_params(struct snd_pcm_substream *substream,
 	int aif0 = 0;
 	int adctl3 = 0;
 
-	if (codec->dapm.bias_level != SND_SOC_BIAS_OFF)
-		return 0;
-
 	wm8962->bclk = snd_soc_params_to_bclk(params);
 	if (params_channels(params) == 1)
 		wm8962->bclk *= 2;
@@ -3417,7 +3414,7 @@ static int wm8962_set_fll(struct snd_soc_codec *codec, int fll_id, int source,
 			  unsigned int Fref, unsigned int Fout)
 {
 	struct wm8962_priv *wm8962 = snd_soc_codec_get_drvdata(codec);
-	struct _fll_div fll_div;
+	struct _fll_div fll_div = {0};
 	unsigned long timeout;
 	int ret;
 	int fll1 = snd_soc_read(codec, WM8962_FLL_CONTROL_1) & WM8962_FLL_ENA;
@@ -3462,9 +3459,6 @@ static int wm8962_set_fll(struct snd_soc_codec *codec, int fll_id, int source,
 
 	if (fll_div.theta || fll_div.lambda)
 		fll1 |= WM8962_FLL_FRAC;
-
-	/* Stop the FLL while we reconfigure */
-	snd_soc_update_bits(codec, WM8962_FLL_CONTROL_1, WM8962_FLL_ENA, 0);
 
 	snd_soc_update_bits(codec, WM8962_FLL_CONTROL_2,
 			    WM8962_FLL_OUTDIV_MASK |
@@ -4096,6 +4090,32 @@ static int wm8962_probe(struct snd_soc_codec *codec)
 					    WM8962_MICBIAS_LVL,
 					    pdata->mic_cfg);
 	}
+
+	/* set the default volume for playback and record*/
+	snd_soc_update_bits(codec, WM8962_HPOUTL_VOLUME,
+			    WM8962_HPOUTL_VOL_MASK, 0x5d);
+	snd_soc_update_bits(codec, WM8962_HPOUTR_VOLUME,
+			    WM8962_HPOUTR_VOL_MASK, 0x5d);
+	snd_soc_update_bits(codec, WM8962_SPKOUTL_VOLUME,
+			    WM8962_SPKOUTL_VOL_MASK, 0x72);
+	snd_soc_update_bits(codec, WM8962_SPKOUTR_VOLUME,
+			    WM8962_SPKOUTR_VOL_MASK, 0x72);
+	snd_soc_update_bits(codec, WM8962_LEFT_DAC_VOLUME,
+			    WM8962_DACL_VOL_MASK, 0xd8);
+	snd_soc_update_bits(codec, WM8962_RIGHT_DAC_VOLUME,
+			    WM8962_DACR_VOL_MASK, 0xd8);
+
+	snd_soc_update_bits(codec, WM8962_LEFT_INPUT_VOLUME,
+			    WM8962_INL_VOL_MASK, 0x3f);
+	snd_soc_update_bits(codec, WM8962_RIGHT_INPUT_VOLUME,
+			    WM8962_INR_VOL_MASK, 0x3f);
+	snd_soc_update_bits(codec, WM8962_LEFT_ADC_VOLUME,
+			    WM8962_ADCL_VOL_MASK, 0xd8);
+	snd_soc_update_bits(codec, WM8962_LEFT_ADC_VOLUME,
+			    WM8962_ADCR_VOL_MASK, 0xd8);
+	snd_soc_update_bits(codec, WM8962_RIGHT_INPUT_MIXER_VOLUME,
+			    WM8962_IN3R_MIXINR_VOL_MASK, 0x7);
+
 
 	/* Latch volume update bits */
 	snd_soc_update_bits(codec, WM8962_LEFT_INPUT_VOLUME,

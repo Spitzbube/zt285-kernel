@@ -351,6 +351,7 @@ static DECLARE_WAIT_QUEUE_HEAD(thread_waitq);
 static DECLARE_WAIT_QUEUE_HEAD(res_waitq);
 static atomic_t req_cnt;
 static int major;
+static int max_ipu_no;
 static int thread_id;
 static atomic_t frame_no;
 static struct class *ipu_class;
@@ -419,6 +420,7 @@ unsigned int fmt_to_bpp(unsigned int pixelformat)
 	case IPU_PIX_FMT_BGR24:
 	case IPU_PIX_FMT_RGB24:
 	case IPU_PIX_FMT_YUV444:
+	case IPU_PIX_FMT_YUV444P:
 		bpp = 24;
 		break;
 	case IPU_PIX_FMT_BGR32:
@@ -464,6 +466,7 @@ cs_t colorspaceofpixel(int fmt)
 	case IPU_PIX_FMT_YVU422P:
 	case IPU_PIX_FMT_YUV422P:
 	case IPU_PIX_FMT_YUV444:
+	case IPU_PIX_FMT_YUV444P:
 	case IPU_PIX_FMT_NV12:
 	case IPU_PIX_FMT_TILED_NV12:
 	case IPU_PIX_FMT_TILED_NV12F:
@@ -496,6 +499,10 @@ static int soc_max_in_width(u32 is_vdoa)
 	return is_vdoa ? 8192 : 4096;
 }
 
+static int soc_max_vdi_in_width(void)
+{
+	return IPU_MAX_VDI_IN_WIDTH;
+}
 static int soc_max_in_height(void)
 {
 	return 4096;
@@ -745,6 +752,11 @@ static void update_offset(unsigned int fmt,
 			+ (width * pos_y)/2 + pos_x/2;
 		*voff = *uoff + (width * height)/2;
 		break;
+	case IPU_PIX_FMT_YUV444P:
+		*off = pos_y * width + pos_x;
+		*uoff = width * height;
+		*voff = width * height * 2;
+		break;
 	case IPU_PIX_FMT_NV12:
 		*off = pos_y * width + pos_x;
 		*uoff = (width * (height - pos_y) - pos_x)
@@ -759,7 +771,7 @@ static void update_offset(unsigned int fmt,
 		 * = line * stride + pixel * 16
 		 */
 		*off = pos_y * width + (pos_x << 4);
-		*uoff = ALIGN(width * height, SZ_4K) + (*off >> 1);
+		*uoff = ALIGN(width * height, SZ_4K) + (*off >> 1) - *off;
 		break;
 	case IPU_PIX_FMT_TILED_NV12F:
 		/*
@@ -768,7 +780,7 @@ static void update_offset(unsigned int fmt,
 		 * instead of 256
 		 */
 		*off = (pos_y >> 1) * width + (pos_x << 3);
-		*uoff = ALIGN(width * height/2, SZ_4K) + (*off >> 1);
+		*uoff = ALIGN(width * height/2, SZ_4K) + (*off >> 1) - *off;
 		break;
 	default:
 		*off = (pos_y * width + pos_x) * fmt_to_bpp(fmt)/8;
@@ -777,13 +789,14 @@ static void update_offset(unsigned int fmt,
 	*stride = width * bytes_per_pixel(fmt);
 }
 
-static int update_split_setting(struct ipu_task_entry *t)
+static int update_split_setting(struct ipu_task_entry *t, bool vdi_split)
 {
 	struct stripe_param left_stripe;
 	struct stripe_param right_stripe;
 	struct stripe_param up_stripe;
 	struct stripe_param down_stripe;
 	u32 iw, ih, ow, oh;
+	u32 max_width;
 
 	if (t->output.rotate >= IPU_ROTATE_90_RIGHT)
 		return IPU_CHECK_ERR_SPLIT_WITH_ROT;
@@ -795,9 +808,13 @@ static int update_split_setting(struct ipu_task_entry *t)
 	oh = t->output.crop.h;
 
 	if (t->set.split_mode & RL_SPLIT) {
+		if (vdi_split)
+			max_width = soc_max_vdi_in_width();
+		else
+			max_width = soc_max_out_width();
 		ipu_calc_stripes_sizes(iw,
 				ow,
-				soc_max_out_width(),
+				max_width,
 				(((unsigned long long)1) << 32), /* 32bit for fractional*/
 				1, /* equal stripes */
 				t->input.format,
@@ -866,6 +883,7 @@ static int check_task(struct ipu_task_entry *t)
 	int tmp;
 	int ret = IPU_CHECK_OK;
 	int timeout;
+	bool vdi_split = false;
 
 	if ((IPU_PIX_FMT_TILED_NV12 == t->overlay.format) ||
 		(IPU_PIX_FMT_TILED_NV12F == t->overlay.format) ||
@@ -1022,6 +1040,11 @@ static int check_task(struct ipu_task_entry *t)
 			t->set.split_mode |= RL_SPLIT;
 		if (t->output.crop.h > soc_max_out_height())
 			t->set.split_mode |= UD_SPLIT;
+		if (!t->set.split_mode && (t->set.mode & VDI_MODE) &&
+				(t->input.crop.w > soc_max_vdi_in_width())) {
+			t->set.split_mode |= RL_SPLIT;
+			vdi_split = true;
+		}
 		if (t->set.split_mode) {
 			if ((t->set.split_mode == RL_SPLIT) ||
 				 (t->set.split_mode == UD_SPLIT))
@@ -1031,7 +1054,7 @@ static int check_task(struct ipu_task_entry *t)
 			if (t->timeout < timeout)
 				t->timeout = timeout;
 
-			ret = update_split_setting(t);
+			ret = update_split_setting(t, vdi_split);
 			if (ret > IPU_CHECK_ERR_MIN)
 				goto done;
 		}
@@ -1147,7 +1170,7 @@ static int _get_vdoa_ipu_res(struct ipu_task_entry *t)
 		}
 	}
 
-	for (i = 0; i < MXC_IPU_MAX_NUM; i++) {
+	for (i = 0; i < max_ipu_no; i++) {
 		ipu = ipu_get_soc(i);
 		if (IS_ERR(ipu))
 			BUG();
@@ -1176,7 +1199,7 @@ static int _get_vdoa_ipu_res(struct ipu_task_entry *t)
 	if (found_ipu)
 		goto next;
 
-	for (i = 0; i < MXC_IPU_MAX_NUM; i++) {
+	for (i = 0; i < max_ipu_no; i++) {
 		ipu = ipu_get_soc(i);
 		if (IS_ERR(ipu))
 			BUG();
@@ -1704,7 +1727,7 @@ static int init_tiled_buf(struct ipu_soc *ipu, struct ipu_task_entry *t,
 		return -EINVAL;
 	else if (param.band_mode)
 		param.band_lines = (1 << t->set.band_lines);
-	for (i = 0; i < MXC_IPU_MAX_NUM; i++) {
+	for (i = 0; i < max_ipu_no; i++) {
 		ipu_idx = ipu_get_soc(i);
 		if (!IS_ERR(ipu_idx) && ipu_idx == ipu)
 			break;
@@ -1712,7 +1735,7 @@ static int init_tiled_buf(struct ipu_soc *ipu, struct ipu_task_entry *t,
 	if (t->set.task & VDOA_ONLY)
 		/* dummy, didn't need ipu res */
 		i = 0;
-	if (MXC_IPU_MAX_NUM == i) {
+	if (max_ipu_no == i) {
 		dev_err(t->dev, "ERR:[0x%p] get ipu num\n", t);
 		return -EINVAL;
 	}
@@ -1749,7 +1772,9 @@ static int init_tiled_buf(struct ipu_soc *ipu, struct ipu_task_entry *t,
 			return -EINVAL;
 		}
 	}
-	vdoa_setup(t->vdoa_handle, &param);
+	ret = vdoa_setup(t->vdoa_handle, &param);
+	if (ret)
+		goto done;
 	vdoa_get_output_buf(t->vdoa_handle, &buf);
 	if (t->set.task & VDOA_ONLY)
 		goto done;
@@ -2813,7 +2838,7 @@ static void get_res_do_task(struct ipu_task_entry *t)
 			do_task_vdoa_only(t);
 		else if ((IPU_PIX_FMT_TILED_NV12F == t->input.format) &&
 				(t->set.mode & VDOA_BAND_MODE) &&
-				(t->input.crop.w > soc_max_out_width()))
+				(t->input.crop.w > soc_max_vdi_in_width()))
 			do_task_vdoa_vdi(t);
 		else
 			do_task(t);
@@ -2883,7 +2908,7 @@ static void wait_split_task_complete(struct ipu_task_entry *parent,
 out:
 	if (ret == -ETIMEDOUT) {
 		/* debug */
-		for (k = 0; k < MXC_IPU_MAX_NUM; k++) {
+		for (k = 0; k < max_ipu_no; k++) {
 			ipu = ipu_get_soc(k);
 			if (IS_ERR(ipu)) {
 				BUG();
@@ -3407,6 +3432,7 @@ int register_ipu_device(struct ipu_soc *ipu, int id)
 
 		mutex_init(&ipu_ch_tbl.lock);
 	}
+	max_ipu_no = ++id;
 	ipu->rot_dma[0].size = 0;
 	ipu->rot_dma[1].size = 0;
 

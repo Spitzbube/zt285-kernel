@@ -159,6 +159,7 @@ config USB_GADGET_ARC
 	depends on ARCH_MXC || ARCH_STMP3XXX || ARCH_MXS
 	select USB_GADGET_DUALSPEED
 	select USB_OTG_UTILS
+	select POWER_SUPPLY
 	help
 	   Some Freescale processors have a USBOTG controller,
 	   which supports device mode.
@@ -172,6 +173,13 @@ config USB_STATIC_IRAM_PPH
 	depends on USB_GADGET_ARC && (ARCH_MX37 || ARCH_MX3 || ARCH_MX25 || ARCH_MX51)
 	help
 	   Apply static IRAM patch to peripheral driver.
+
+config IMX_USB_CHARGER
+	bool "Use i.MX SoC USB charger detect function"
+	depends on USB_GADGET_ARC && ARCH_MX6
+	help
+	  Say "y" will enable i.mx usb charger detect function
+	  (only for i.mx6x currently).
 
 config USB_ARC
 	tristate
@@ -569,7 +577,7 @@ config USB_LANGWELL
 	select USB_GADGET_SELECTED
 
 config USB_GADGET_EG20T
-	boolean "Intel EG20T PCH/OKI SEMICONDUCTOR ML7213 IOH UDC"
+	tristate "Intel EG20T PCH/OKI SEMICONDUCTOR IOH(ML7213/ML7831) UDC"
 	depends on PCI
 	select USB_GADGET_DUALSPEED
 	help
@@ -587,8 +595,9 @@ config USB_GADGET_EG20T
 
 	  This driver also can be used for OKI SEMICONDUCTOR's ML7213 which is
 	  for IVI(In-Vehicle Infotainment) use.
-	  ML7213 is companion chip for Intel Atom E6xx series.
-	  ML7213 is completely compatible for Intel EG20T PCH.
+	  ML7831 is for general purpose use.
+	  ML7213/ML7831 is companion chip for Intel Atom E6xx series.
+	  ML7213/ML7831 is completely compatible for Intel EG20T PCH.
 
 config USB_EG20T
 	tristate

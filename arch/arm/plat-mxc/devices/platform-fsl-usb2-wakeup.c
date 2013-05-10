@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright (C) 2011-2012 Freescale Semiconductor, Inc. All Rights Reserved.
  *
  * Copyright (C) 2010 Pengutronix
  * Uwe Kleine-Koenig <u.kleine-koenig@pengutronix.de>
@@ -25,6 +25,12 @@ const struct imx_fsl_usb2_wakeup_data imx6q_fsl_hs_wakeup_data[] __initconst = {
 	imx_fsl_usb2_wakeup_data_entry_single(MX6Q, 2, HS2),
 	imx_fsl_usb2_wakeup_data_entry_single(MX6Q, 3, HS3),
 };
+
+const struct imx_fsl_usb2_wakeup_data imx6sl_fsl_hs_wakeup_data[] __initconst = {
+	imx_fsl_usb2_wakeup_data_entry_single(MX6SL, 1, HS1),
+	imx_fsl_usb2_wakeup_data_entry_single(MX6SL, 2, HS2),
+	imx_fsl_usb2_wakeup_data_entry_single(MX6SL, 3, HS3),
+};
 #endif /* ifdef CONFIG_SOC_IMX6Q */
 
 struct platform_device *__init imx_add_fsl_usb2_wakeup(
@@ -46,3 +52,4 @@ struct platform_device *__init imx_add_fsl_usb2_wakeup(
 			res, ARRAY_SIZE(res),
 			pdata, sizeof(*pdata), DMA_BIT_MASK(32));
 }
+EXPORT_SYMBOL(imx_add_fsl_usb2_wakeup);

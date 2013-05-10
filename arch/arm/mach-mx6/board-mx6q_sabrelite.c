@@ -102,6 +102,8 @@ void __init early_console_setup(unsigned long base, struct clk *clk);
 static struct clk *sata_clk;
 
 extern char *gp_reg_id;
+extern char *soc_reg_id;
+extern char *pu_reg_id;
 
 extern struct regulator *(*get_cpu_regulator)(void);
 extern void (*put_cpu_regulator)(void);
@@ -327,6 +329,16 @@ static iomux_v3_cfg_t mx6q_sabrelite_csi0_sensor_pads[] = {
 	MX6Q_PAD_NANDF_WP_B__GPIO_6_9,		/* J16 - MIPI GP */
 };
 
+static iomux_v3_cfg_t mx6q_sabrelite_hdmi_ddc_pads[] = {
+	MX6Q_PAD_KEY_COL3__HDMI_TX_DDC_SCL, /* HDMI DDC SCL */
+	MX6Q_PAD_KEY_ROW3__HDMI_TX_DDC_SDA, /* HDMI DDC SDA */
+};
+
+static iomux_v3_cfg_t mx6q_sabrelite_i2c2_pads[] = {
+	MX6Q_PAD_KEY_COL3__I2C2_SCL,	/* I2C2 SCL */
+	MX6Q_PAD_KEY_ROW3__I2C2_SDA,	/* I2C2 SDA */
+};
+
 #define MX6Q_USDHC_PAD_SETTING(id, speed)	\
 mx6q_sd##id##_##speed##mhz[] = {		\
 	MX6Q_PAD_SD##id##_CLK__USDHC##id##_CLK_##speed##MHZ,	\
@@ -350,59 +362,64 @@ enum sd_pad_mode {
 	SD_PAD_MODE_HIGH_SPEED,
 };
 
-static int plt_sd3_pad_change(int clock)
+static int plt_sd_pad_change(unsigned int index, int clock)
 {
+	/* LOW speed is the default state of SD pads */
 	static enum sd_pad_mode pad_mode = SD_PAD_MODE_LOW_SPEED;
 
-	if (clock > 100000000) {
-		if (pad_mode == SD_PAD_MODE_HIGH_SPEED)
-			return 0;
+	iomux_v3_cfg_t *sd_pads_200mhz = NULL;
+	iomux_v3_cfg_t *sd_pads_100mhz = NULL;
+	iomux_v3_cfg_t *sd_pads_50mhz = NULL;
 
-		pad_mode = SD_PAD_MODE_HIGH_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(mx6q_sd3_200mhz,
-					ARRAY_SIZE(mx6q_sd3_200mhz));
-	} else if (clock > 52000000) {
-		if (pad_mode == SD_PAD_MODE_MED_SPEED)
-			return 0;
+	u32 sd_pads_200mhz_cnt;
+	u32 sd_pads_100mhz_cnt;
+	u32 sd_pads_50mhz_cnt;
 
-		pad_mode = SD_PAD_MODE_MED_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(mx6q_sd3_100mhz,
-					ARRAY_SIZE(mx6q_sd3_100mhz));
-	} else {
-		if (pad_mode == SD_PAD_MODE_LOW_SPEED)
-			return 0;
+	switch (index) {
+	case 2:
+		sd_pads_200mhz = mx6q_sd3_200mhz;
+		sd_pads_100mhz = mx6q_sd3_100mhz;
+		sd_pads_50mhz = mx6q_sd3_50mhz;
 
-		pad_mode = SD_PAD_MODE_LOW_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(mx6q_sd3_50mhz,
-					ARRAY_SIZE(mx6q_sd3_50mhz));
+		sd_pads_200mhz_cnt = ARRAY_SIZE(mx6q_sd3_200mhz);
+		sd_pads_100mhz_cnt = ARRAY_SIZE(mx6q_sd3_100mhz);
+		sd_pads_50mhz_cnt = ARRAY_SIZE(mx6q_sd3_50mhz);
+		break;
+	case 3:
+		sd_pads_200mhz = mx6q_sd4_200mhz;
+		sd_pads_100mhz = mx6q_sd4_100mhz;
+		sd_pads_50mhz = mx6q_sd4_50mhz;
+
+		sd_pads_200mhz_cnt = ARRAY_SIZE(mx6q_sd4_200mhz);
+		sd_pads_100mhz_cnt = ARRAY_SIZE(mx6q_sd4_100mhz);
+		sd_pads_50mhz_cnt = ARRAY_SIZE(mx6q_sd4_50mhz);
+		break;
+	default:
+		printk(KERN_ERR "no such SD host controller index %d\n", index);
+		return -EINVAL;
 	}
-}
-
-static int plt_sd4_pad_change(int clock)
-{
-	static enum sd_pad_mode pad_mode = SD_PAD_MODE_LOW_SPEED;
 
 	if (clock > 100000000) {
 		if (pad_mode == SD_PAD_MODE_HIGH_SPEED)
 			return 0;
-
+		BUG_ON(!sd_pads_200mhz);
 		pad_mode = SD_PAD_MODE_HIGH_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(mx6q_sd4_200mhz,
-					ARRAY_SIZE(mx6q_sd4_200mhz));
+		return mxc_iomux_v3_setup_multiple_pads(sd_pads_200mhz,
+							sd_pads_200mhz_cnt);
 	} else if (clock > 52000000) {
 		if (pad_mode == SD_PAD_MODE_MED_SPEED)
 			return 0;
-
+		BUG_ON(!sd_pads_100mhz);
 		pad_mode = SD_PAD_MODE_MED_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(mx6q_sd4_100mhz,
-					ARRAY_SIZE(mx6q_sd4_100mhz));
+		return mxc_iomux_v3_setup_multiple_pads(sd_pads_100mhz,
+							sd_pads_100mhz_cnt);
 	} else {
 		if (pad_mode == SD_PAD_MODE_LOW_SPEED)
 			return 0;
-
+		BUG_ON(!sd_pads_50mhz);
 		pad_mode = SD_PAD_MODE_LOW_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(mx6q_sd4_50mhz,
-					ARRAY_SIZE(mx6q_sd4_50mhz));
+		return mxc_iomux_v3_setup_multiple_pads(sd_pads_50mhz,
+							sd_pads_50mhz_cnt);
 	}
 }
 
@@ -410,14 +427,14 @@ static const struct esdhc_platform_data mx6q_sabrelite_sd3_data __initconst = {
 	.cd_gpio = MX6Q_SABRELITE_SD3_CD,
 	.wp_gpio = MX6Q_SABRELITE_SD3_WP,
 	.keep_power_at_suspend = 1,
-	.platform_pad_change = plt_sd3_pad_change,
+	.platform_pad_change = plt_sd_pad_change,
 };
 
 static const struct esdhc_platform_data mx6q_sabrelite_sd4_data __initconst = {
 	.cd_gpio = MX6Q_SABRELITE_SD4_CD,
 	.wp_gpio = MX6Q_SABRELITE_SD4_WP,
 	.keep_power_at_suspend = 1,
-	.platform_pad_change = plt_sd4_pad_change,
+	.platform_pad_change = plt_sd_pad_change,
 };
 
 static const struct anatop_thermal_platform_data
@@ -467,7 +484,7 @@ static struct mtd_partition imx6_sabrelite_spi_nor_partitions[] = {
 	{
 	 .name = "bootloader",
 	 .offset = 0,
-	 .size = 0x00040000,
+	 .size = 0x00100000,
 	},
 	{
 	 .name = "kernel",
@@ -596,6 +613,7 @@ static void mx6q_csi0_io_init(void)
 
 static struct fsl_mxc_camera_platform_data camera_data = {
 	.mclk = 24000000,
+	.mclk_source = 0,
 	.csi = 0,
 	.io_init = mx6q_csi0_io_init,
 };
@@ -644,7 +662,6 @@ static void __init imx6q_sabrelite_init_usb(void)
 
 	mx6_set_otghost_vbus_func(imx6q_sabrelite_usbotg_vbus);
 	mx6_usb_dr_init();
-	mx6_usb_h1_init();
 }
 
 /* HW Initialization, if return 0, initialization is successful. */
@@ -741,7 +758,7 @@ static const struct flexcan_platform_data
 };
 
 static struct viv_gpu_platform_data imx6q_gpu_pdata __initdata = {
-	.reserved_mem_size = SZ_128M,
+	.reserved_mem_size = SZ_128M + SZ_64M,
 };
 
 static struct imx_asrc_platform_data imx_asrc_data = {
@@ -796,10 +813,32 @@ static void hdmi_init(int ipu_id, int disp_id)
 
 	/* GPR3, bits 2-3 = HDMI_MUX_CTL */
 	mxc_iomux_set_gpr_register(3, 2, 2, hdmi_mux_setting);
+
+	/* Set HDMI event as SDMA event2 while Chip version later than TO1.2 */
+	if ((mx6q_revision() > IMX_CHIP_REVISION_1_1))
+		mxc_iomux_set_gpr_register(0, 0, 1, 1);
+}
+
+/* On mx6x sbarelite board i2c2 iomux with hdmi ddc,
+ * the pins default work at i2c2 function,
+ when hdcp enable, the pins should work at ddc function */
+
+static void hdmi_enable_ddc_pin(void)
+{
+	mxc_iomux_v3_setup_multiple_pads(mx6q_sabrelite_hdmi_ddc_pads,
+		ARRAY_SIZE(mx6q_sabrelite_hdmi_ddc_pads));
+}
+
+static void hdmi_disable_ddc_pin(void)
+{
+	mxc_iomux_v3_setup_multiple_pads(mx6q_sabrelite_i2c2_pads,
+		ARRAY_SIZE(mx6q_sabrelite_i2c2_pads));
 }
 
 static struct fsl_mxc_hdmi_platform_data hdmi_data = {
 	.init = hdmi_init,
+	.enable_pins = hdmi_enable_ddc_pin,
+	.disable_pins = hdmi_disable_ddc_pin,
 };
 
 static struct fsl_mxc_hdmi_core_platform_data hdmi_core_data = {
@@ -842,6 +881,21 @@ static struct ion_platform_data imx_ion_data = {
 		},
 	},
 };
+
+static struct fsl_mxc_capture_platform_data capture_data[] = {
+	{
+		.csi = 0,
+		.ipu = 0,
+		.mclk_source = 0,
+		.is_mipi = 0,
+	}, {
+		.csi = 1,
+		.ipu = 0,
+		.mclk_source = 0,
+		.is_mipi = 1,
+	},
+};
+
 
 static void sabrelite_suspend_enter(void)
 {
@@ -1026,6 +1080,8 @@ static struct platform_pwm_backlight_data mx6_sabrelite_pwm_backlight_data = {
 
 static struct mxc_dvfs_platform_data sabrelite_dvfscore_data = {
 	.reg_id = "cpu_vddgp",
+	.soc_id = "cpu_vddsoc",
+	.pu_id = "cpu_vddvpu",
 	.clk1_id = "cpu_clk",
 	.clk2_id = "gpc_dvfs_clk",
 	.gpc_cntr_offset = MXC_GPC_CNTR_OFFSET,
@@ -1106,6 +1162,8 @@ static void __init mx6_sabrelite_board_init(void)
 #endif
 
 	gp_reg_id = sabrelite_dvfscore_data.reg_id;
+	soc_reg_id = sabrelite_dvfscore_data.soc_id;
+	pu_reg_id = sabrelite_dvfscore_data.pu_id;
 	mx6q_sabrelite_init_uart();
 	imx6q_add_mxc_hdmi_core(&hdmi_core_data);
 
@@ -1119,9 +1177,12 @@ static void __init mx6_sabrelite_board_init(void)
 	imx6q_add_lcdif(&lcdif_data);
 	imx6q_add_ldb(&ldb_data);
 	imx6q_add_v4l2_output(0);
-	imx6q_add_v4l2_capture(0);
+	imx6q_add_v4l2_capture(0, &capture_data[0]);
+	imx6q_add_v4l2_capture(1, &capture_data[1]);
 	imx6q_add_mipi_csi2(&mipi_csi2_pdata);
 	imx6q_add_imx_snvs_rtc();
+
+	imx6q_add_imx_caam();
 
 	imx6q_add_imx_i2c(0, &mx6q_sabrelite_i2c_data);
 	imx6q_add_imx_i2c(1, &mx6q_sabrelite_i2c_data);
@@ -1223,28 +1284,28 @@ static void __init mx6q_sabrelite_reserve(void)
 {
 	phys_addr_t phys;
 	int i;
-
+#if defined(CONFIG_MXC_GPU_VIV) || defined(CONFIG_MXC_GPU_VIV_MODULE)
 	if (imx6q_gpu_pdata.reserved_mem_size) {
 		phys = memblock_alloc_base(imx6q_gpu_pdata.reserved_mem_size,
 					   SZ_4K, SZ_1G);
-		memblock_free(phys, imx6q_gpu_pdata.reserved_mem_size);
 		memblock_remove(phys, imx6q_gpu_pdata.reserved_mem_size);
 		imx6q_gpu_pdata.reserved_mem_base = phys;
 	}
+#endif
 
+#if defined(CONFIG_ION)
 	if (imx_ion_data.heaps[0].size) {
 		phys = memblock_alloc(imx_ion_data.heaps[0].size, SZ_4K);
-		memblock_free(phys, imx_ion_data.heaps[0].size);
 		memblock_remove(phys, imx_ion_data.heaps[0].size);
 		imx_ion_data.heaps[0].base = phys;
 	}
+#endif
 
 	for (i = 0; i < ARRAY_SIZE(sabrelite_fb_data); i++)
 		if (sabrelite_fb_data[i].res_size[0]) {
 			/* reserve for background buffer */
 			phys = memblock_alloc(sabrelite_fb_data[i].res_size[0],
 						SZ_4K);
-			memblock_free(phys, sabrelite_fb_data[i].res_size[0]);
 			memblock_remove(phys, sabrelite_fb_data[i].res_size[0]);
 			sabrelite_fb_data[i].res_base[0] = phys;
 		}

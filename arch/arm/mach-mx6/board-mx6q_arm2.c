@@ -53,6 +53,9 @@
 #include <linux/regulator/fixed.h>
 #include <linux/mfd/max17135.h>
 #include <sound/pcm.h>
+#include <linux/mxc_asrc.h>
+#include <linux/mfd/mxc-hdmi-core.h>
+
 
 #include <mach/common.h>
 #include <mach/hardware.h>
@@ -77,7 +80,6 @@
 #include "devices-imx6q.h"
 #include "crm_regs.h"
 #include "cpu_op-mx6.h"
-
 #include "board-mx6q_arm2.h"
 #include "board-mx6dl_arm2.h"
 
@@ -168,10 +170,11 @@ static int disable_mipi_dsi;
 extern struct regulator *(*get_cpu_regulator)(void);
 extern void (*put_cpu_regulator)(void);
 extern char *gp_reg_id;
+extern char *soc_reg_id;
+extern char *pu_reg_id;
 extern int epdc_enabled;
 extern void mx6_cpu_regulator_init(void);
 static int max17135_regulator_init(struct max17135 *max17135);
-extern volatile int num_cpu_idle_lock;
 
 enum sd_pad_mode {
 	SD_PAD_MODE_LOW_SPEED,
@@ -179,111 +182,84 @@ enum sd_pad_mode {
 	SD_PAD_MODE_HIGH_SPEED,
 };
 
-static int plt_sd3_pad_change(int clock)
+static int plt_sd_pad_change(unsigned int index, int clock)
 {
+	/* LOW speed is the default state of SD pads */
 	static enum sd_pad_mode pad_mode = SD_PAD_MODE_LOW_SPEED;
 
-	iomux_v3_cfg_t *sd3_pads_200mhz = NULL;
-	iomux_v3_cfg_t *sd3_pads_100mhz = NULL;
-	iomux_v3_cfg_t *sd3_pads_50mhz = NULL;
+	iomux_v3_cfg_t *sd_pads_200mhz = NULL;
+	iomux_v3_cfg_t *sd_pads_100mhz = NULL;
+	iomux_v3_cfg_t *sd_pads_50mhz = NULL;
 
-	u32 sd3_pads_200mhz_cnt;
-	u32 sd3_pads_100mhz_cnt;
-	u32 sd3_pads_50mhz_cnt;
+	u32 sd_pads_200mhz_cnt;
+	u32 sd_pads_100mhz_cnt;
+	u32 sd_pads_50mhz_cnt;
 
-	if (cpu_is_mx6q()) {
-		sd3_pads_200mhz = mx6q_sd3_200mhz;
-		sd3_pads_100mhz = mx6q_sd3_100mhz;
-		sd3_pads_50mhz = mx6q_sd3_50mhz;
+	switch (index) {
+	case 2:
+		if (cpu_is_mx6q()) {
+			sd_pads_200mhz = mx6q_sd3_200mhz;
+			sd_pads_100mhz = mx6q_sd3_100mhz;
+			sd_pads_50mhz = mx6q_sd3_50mhz;
 
-		sd3_pads_200mhz_cnt = ARRAY_SIZE(mx6q_sd3_200mhz);
-		sd3_pads_100mhz_cnt = ARRAY_SIZE(mx6q_sd3_100mhz);
-		sd3_pads_50mhz_cnt = ARRAY_SIZE(mx6q_sd3_50mhz);
-	} else if (cpu_is_mx6dl()) {
-		sd3_pads_200mhz = mx6dl_sd3_200mhz;
-		sd3_pads_100mhz = mx6dl_sd3_100mhz;
-		sd3_pads_50mhz = mx6dl_sd3_50mhz;
+			sd_pads_200mhz_cnt = ARRAY_SIZE(mx6q_sd3_200mhz);
+			sd_pads_100mhz_cnt = ARRAY_SIZE(mx6q_sd3_100mhz);
+			sd_pads_50mhz_cnt = ARRAY_SIZE(mx6q_sd3_50mhz);
+		} else if (cpu_is_mx6dl()) {
+			sd_pads_200mhz = mx6dl_sd3_200mhz;
+			sd_pads_100mhz = mx6dl_sd3_100mhz;
+			sd_pads_50mhz = mx6dl_sd3_50mhz;
 
-		sd3_pads_200mhz_cnt = ARRAY_SIZE(mx6dl_sd3_200mhz);
-		sd3_pads_100mhz_cnt = ARRAY_SIZE(mx6dl_sd3_100mhz);
-		sd3_pads_50mhz_cnt = ARRAY_SIZE(mx6dl_sd3_50mhz);
+			sd_pads_200mhz_cnt = ARRAY_SIZE(mx6dl_sd3_200mhz);
+			sd_pads_100mhz_cnt = ARRAY_SIZE(mx6dl_sd3_100mhz);
+			sd_pads_50mhz_cnt = ARRAY_SIZE(mx6dl_sd3_50mhz);
+		}
+		break;
+	case 3:
+		if (cpu_is_mx6q()) {
+			sd_pads_200mhz = mx6q_sd4_200mhz;
+			sd_pads_100mhz = mx6q_sd4_100mhz;
+			sd_pads_50mhz = mx6q_sd4_50mhz;
+
+			sd_pads_200mhz_cnt = ARRAY_SIZE(mx6q_sd4_200mhz);
+			sd_pads_100mhz_cnt = ARRAY_SIZE(mx6q_sd4_100mhz);
+			sd_pads_50mhz_cnt = ARRAY_SIZE(mx6q_sd4_50mhz);
+		} else if (cpu_is_mx6dl()) {
+			sd_pads_200mhz = mx6dl_sd4_200mhz;
+			sd_pads_100mhz = mx6dl_sd4_100mhz;
+			sd_pads_50mhz = mx6dl_sd4_50mhz;
+
+			sd_pads_200mhz_cnt = ARRAY_SIZE(mx6dl_sd4_200mhz);
+			sd_pads_100mhz_cnt = ARRAY_SIZE(mx6dl_sd4_100mhz);
+			sd_pads_50mhz_cnt = ARRAY_SIZE(mx6dl_sd4_50mhz);
+		}
+		break;
+	default:
+		printk(KERN_ERR "no such SD host controller index %d\n", index);
+		return -EINVAL;
 	}
 
 	if (clock > 100000000) {
 		if (pad_mode == SD_PAD_MODE_HIGH_SPEED)
 			return 0;
-		BUG_ON(!sd3_pads_200mhz);
+		BUG_ON(!sd_pads_200mhz);
 		pad_mode = SD_PAD_MODE_HIGH_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(sd3_pads_200mhz,
-							sd3_pads_200mhz_cnt);
+		return mxc_iomux_v3_setup_multiple_pads(sd_pads_200mhz,
+							sd_pads_200mhz_cnt);
 	} else if (clock > 52000000) {
 		if (pad_mode == SD_PAD_MODE_MED_SPEED)
 			return 0;
-		BUG_ON(!sd3_pads_100mhz);
+		BUG_ON(!sd_pads_100mhz);
 		pad_mode = SD_PAD_MODE_MED_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(sd3_pads_100mhz,
-							sd3_pads_100mhz_cnt);
+		return mxc_iomux_v3_setup_multiple_pads(sd_pads_100mhz,
+							sd_pads_100mhz_cnt);
 	} else {
 		if (pad_mode == SD_PAD_MODE_LOW_SPEED)
 			return 0;
-		BUG_ON(!sd3_pads_50mhz);
+		BUG_ON(!sd_pads_50mhz);
 		pad_mode = SD_PAD_MODE_LOW_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(sd3_pads_50mhz,
-							sd3_pads_50mhz_cnt);
-	}
-}
-
-static int plt_sd4_pad_change(int clock)
-{
-	static enum sd_pad_mode pad_mode = SD_PAD_MODE_LOW_SPEED;
-
-	iomux_v3_cfg_t *sd4_pads_200mhz = NULL;
-	iomux_v3_cfg_t *sd4_pads_100mhz = NULL;
-	iomux_v3_cfg_t *sd4_pads_50mhz = NULL;
-
-	u32 sd4_pads_200mhz_cnt;
-	u32 sd4_pads_100mhz_cnt;
-	u32 sd4_pads_50mhz_cnt;
-
-	if (cpu_is_mx6q()) {
-		sd4_pads_200mhz = mx6q_sd4_200mhz;
-		sd4_pads_100mhz = mx6q_sd4_100mhz;
-		sd4_pads_50mhz = mx6q_sd4_50mhz;
-
-		sd4_pads_200mhz_cnt = ARRAY_SIZE(mx6q_sd4_200mhz);
-		sd4_pads_100mhz_cnt = ARRAY_SIZE(mx6q_sd4_100mhz);
-		sd4_pads_50mhz_cnt = ARRAY_SIZE(mx6q_sd4_50mhz);
-	} else if (cpu_is_mx6dl()) {
-		sd4_pads_200mhz = mx6dl_sd4_200mhz;
-		sd4_pads_100mhz = mx6dl_sd4_100mhz;
-		sd4_pads_50mhz = mx6dl_sd4_50mhz;
-
-		sd4_pads_200mhz_cnt = ARRAY_SIZE(mx6dl_sd4_200mhz);
-		sd4_pads_100mhz_cnt = ARRAY_SIZE(mx6dl_sd4_100mhz);
-		sd4_pads_50mhz_cnt = ARRAY_SIZE(mx6dl_sd4_50mhz);
-	}
-
-	if (clock > 100000000) {
-		if (pad_mode == SD_PAD_MODE_HIGH_SPEED)
-			return 0;
-
-		pad_mode = SD_PAD_MODE_HIGH_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(sd4_pads_200mhz,
-							sd4_pads_200mhz_cnt);
-	} else if (clock > 52000000) {
-		if (pad_mode == SD_PAD_MODE_MED_SPEED)
-			return 0;
-
-		pad_mode = SD_PAD_MODE_MED_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(sd4_pads_100mhz,
-							sd4_pads_100mhz_cnt);
-	} else {
-		if (pad_mode == SD_PAD_MODE_LOW_SPEED)
-			return 0;
-
-		pad_mode = SD_PAD_MODE_LOW_SPEED;
-		return mxc_iomux_v3_setup_multiple_pads(sd4_pads_50mhz,
-							sd4_pads_50mhz_cnt);
+		return mxc_iomux_v3_setup_multiple_pads(sd_pads_50mhz,
+							sd_pads_50mhz_cnt);
 	}
 }
 
@@ -294,7 +270,7 @@ static const struct esdhc_platform_data mx6_arm2_sd3_data __initconst = {
 	.support_8bit		= 1,
 	.keep_power_at_suspend	= 1,
 	.delay_line		= 0,
-	.platform_pad_change	= plt_sd3_pad_change,
+	.platform_pad_change	= plt_sd_pad_change,
 };
 
 /* No card detect signal for SD4 on ARM2 board*/
@@ -302,7 +278,7 @@ static const struct esdhc_platform_data mx6_arm2_sd4_data __initconst = {
 	.always_present		= 1,
 	.support_8bit		= 1,
 	.keep_power_at_suspend	= 1,
-	.platform_pad_change	= plt_sd4_pad_change,
+	.platform_pad_change	= plt_sd_pad_change,
 };
 
 static int __init gpmi_nand_platform_init(void)
@@ -323,7 +299,7 @@ static int __init gpmi_nand_platform_init(void)
 }
 
 static struct gpmi_nand_platform_data
-mx6_gpmi_nand_platform_data = {
+mx6_gpmi_nand_platform_data __initdata = {
 	.platform_init           = gpmi_nand_platform_init,
 	.min_prop_delay_in_ns    = 5,
 	.max_prop_delay_in_ns    = 9,
@@ -419,7 +395,7 @@ static struct mtd_partition m25p32_partitions[] = {
 	{
 		.name	= "bootloader",
 		.offset	= 0,
-		.size	= 0x00040000,
+		.size	= 0x00100000,
 	}, {
 		.name	= "kernel",
 		.offset	= MTDPART_OFS_APPEND,
@@ -588,6 +564,7 @@ static struct fsl_mxc_camera_platform_data camera_data = {
 	.analog_regulator	= "DA9052_LDO7",
 	.core_regulator		= "DA9052_LDO9",
 	.mclk			= 24000000,
+	.mclk_source = 0,
 	.csi			= 0,
 	.io_init		= mx6_csi0_io_init,
 };
@@ -649,15 +626,15 @@ static void mx6_mipi_sensor_io_init(void)
 	mxc_iomux_v3_setup_multiple_pads(mipi_sensor_pads,
 					mipi_sensor_pads_cnt);
 
-	if (cpu_is_mx6q())
-		mxc_iomux_set_gpr_register(1, 19, 1, 0);
+	/*for mx6dl, mipi virtual channel 1 connect to csi 1*/
 	if (cpu_is_mx6dl())
-		mxc_iomux_set_gpr_register(13, 0, 3, 0);
+		mxc_iomux_set_gpr_register(13, 3, 3, 1);
 }
 
 static struct fsl_mxc_camera_platform_data ov5640_mipi_data = {
 	.mclk		= 24000000,
-	.csi		= 0,
+	.csi		= 1,
+	.mclk_source = 0,
 	.io_init	= mx6_mipi_sensor_io_init,
 };
 
@@ -1268,7 +1245,6 @@ static void __init mx6_arm2_init_usb(void)
 
 	mx6_set_otghost_vbus_func(imx6_arm2_usbotg_vbus);
 	mx6_usb_dr_init();
-	mx6_usb_h1_init();
 #ifdef CONFIG_USB_EHCI_ARC_HSIC
 	mx6_usb_h2_init();
 	mx6_usb_h3_init();
@@ -1276,7 +1252,7 @@ static void __init mx6_arm2_init_usb(void)
 }
 
 static struct viv_gpu_platform_data imx6_gpu_pdata __initdata = {
-	.reserved_mem_size = SZ_128M,
+	.reserved_mem_size = SZ_128M + SZ_64M,
 };
 
 /* HW Initialization, if return 0, initialization is successful. */
@@ -1438,10 +1414,40 @@ static void hdmi_init(int ipu_id, int disp_id)
 
 	/* GPR3, bits 2-3 = HDMI_MUX_CTL */
 	mxc_iomux_set_gpr_register(3, 2, 2, hdmi_mux_setting);
+
+	/* Set HDMI event as SDMA event2 while Chip version later than TO1.2 */
+	if (hdmi_SDMA_check())
+		mxc_iomux_set_gpr_register(0, 0, 1, 1);
+}
+
+/* On mx6x arm2 board i2c2 iomux with hdmi ddc,
+ * the pins default work at i2c2 function,
+ when hdcp enable, the pins should work at ddc function */
+
+static void hdmi_enable_ddc_pin(void)
+{
+	if (cpu_is_mx6dl())
+		mxc_iomux_v3_setup_multiple_pads(mx6dl_arm2_hdmi_ddc_pads,
+			ARRAY_SIZE(mx6dl_arm2_hdmi_ddc_pads));
+	else
+		mxc_iomux_v3_setup_multiple_pads(mx6q_arm2_hdmi_ddc_pads,
+			ARRAY_SIZE(mx6q_arm2_hdmi_ddc_pads));
+}
+
+static void hdmi_disable_ddc_pin(void)
+{
+	if (cpu_is_mx6dl())
+		mxc_iomux_v3_setup_multiple_pads(mx6dl_arm2_i2c2_pads,
+			ARRAY_SIZE(mx6dl_arm2_i2c2_pads));
+	else
+		mxc_iomux_v3_setup_multiple_pads(mx6q_arm2_i2c2_pads,
+			ARRAY_SIZE(mx6q_arm2_i2c2_pads));
 }
 
 static struct fsl_mxc_hdmi_platform_data hdmi_data = {
-	.init		= hdmi_init,
+	.init = hdmi_init,
+	.enable_pins = hdmi_enable_ddc_pin,
+	.disable_pins = hdmi_disable_ddc_pin,
 };
 
 static struct fsl_mxc_hdmi_core_platform_data hdmi_core_data = {
@@ -1538,6 +1544,21 @@ static struct mipi_csi2_platform_data mipi_csi2_pdata = {
 	.pixel_clk	= "emi_clk",
 };
 
+static struct fsl_mxc_capture_platform_data capture_data[] = {
+	{
+		.csi = 0,
+		.ipu = 0,
+		.mclk_source = 0,
+		.is_mipi = 0,
+	}, {
+		.csi = 1,
+		.ipu = 0,
+		.mclk_source = 0,
+		.is_mipi = 1,
+	},
+};
+
+
 static void arm2_suspend_enter(void)
 {
 	/* suspend preparation */
@@ -1553,8 +1574,14 @@ static const struct pm_platform_data mx6_arm2_pm_data __initconst = {
 	.suspend_exit	= arm2_suspend_exit,
 };
 
+static const struct asrc_p2p_params esai_p2p __initconst = {
+       .p2p_rate = 44100,
+       .p2p_width = ASRC_WIDTH_24_BIT,
+};
+
 static struct mxc_audio_platform_data sab_audio_data = {
 	.sysclk	= 16934400,
+	.priv = (void *)&esai_p2p,
 };
 
 static struct platform_device sab_audio_device = {
@@ -1868,6 +1895,8 @@ static struct mxc_mlb_platform_data mx6_arm2_mlb150_data = {
 
 static struct mxc_dvfs_platform_data arm2_dvfscore_data = {
 	.reg_id			= "cpu_vddgp",
+	.soc_id			= "cpu_vddsoc",
+	.pu_id			= "cpu_vddvpu",
 	.clk1_id		= "cpu_clk",
 	.clk2_id		= "gpc_dvfs_clk",
 	.gpc_cntr_offset	= MXC_GPC_CNTR_OFFSET,
@@ -2013,7 +2042,6 @@ static void __init mx6_arm2_init(void)
 		spdif_pads_cnt =  ARRAY_SIZE(mx6dl_arm2_spdif_pads);
 		flexcan_pads_cnt = ARRAY_SIZE(mx6dl_arm2_can_pads);
 		i2c3_pads_cnt = ARRAY_SIZE(mx6dl_arm2_i2c3_pads);
-		num_cpu_idle_lock = 0xffff0000;
 	}
 
 	BUG_ON(!common_pads);
@@ -2063,6 +2091,8 @@ static void __init mx6_arm2_init(void)
 	 */
 
 	gp_reg_id = arm2_dvfscore_data.reg_id;
+	soc_reg_id = arm2_dvfscore_data.soc_id;
+	pu_reg_id = arm2_dvfscore_data.pu_id;
 	mx6_arm2_init_uart();
 
 
@@ -2091,9 +2121,12 @@ static void __init mx6_arm2_init(void)
 	imx6q_add_lcdif(&lcdif_data);
 	imx6q_add_ldb(&ldb_data);
 	imx6q_add_v4l2_output(0);
-	imx6q_add_v4l2_capture(0);
+	imx6q_add_v4l2_capture(0, &capture_data[0]);
+	imx6q_add_v4l2_capture(1, &capture_data[1]);
 
 	imx6q_add_imx_snvs_rtc();
+
+	imx6q_add_imx_caam();
 
 	imx6q_add_imx_i2c(0, &mx6_arm2_i2c0_data);
 	imx6q_add_imx_i2c(1, &mx6_arm2_i2c1_data);
@@ -2194,6 +2227,7 @@ static void __init mx6_arm2_init(void)
 		mxc_register_device(&max17135_sensor_device, NULL);
 		imx6dl_add_imx_epdc(&epdc_data);
 	}
+	/* Add PCIe RC interface support */
 	imx6q_add_pcie(&mx6_arm2_pcie_data);
 	imx6q_add_busfreq();
 }
@@ -2219,21 +2253,23 @@ static struct sys_timer mxc_timer = {
 static void __init mx6_arm2_reserve(void)
 {
 	phys_addr_t phys;
-
+#if defined(CONFIG_MXC_GPU_VIV) || defined(CONFIG_MXC_GPU_VIV_MODULE)
 	if (imx6_gpu_pdata.reserved_mem_size) {
 		phys = memblock_alloc_base(
 			imx6_gpu_pdata.reserved_mem_size, SZ_4K, SZ_2G);
-		memblock_free(phys, imx6_gpu_pdata.reserved_mem_size);
 		memblock_remove(phys, imx6_gpu_pdata.reserved_mem_size);
 		imx6_gpu_pdata.reserved_mem_base = phys;
 	}
+#endif
 
+#if defined(CONFIG_ION)
 	if (imx_ion_data.heaps[0].size) {
 		phys = memblock_alloc(imx_ion_data.heaps[0].size, SZ_4K);
 		memblock_free(phys, imx_ion_data.heaps[0].size);
 		memblock_remove(phys, imx_ion_data.heaps[0].size);
 		imx_ion_data.heaps[0].base = phys;
 	}
+#endif
 }
 
 MACHINE_START(MX6Q_ARM2, "Freescale i.MX 6Quad/Solo/DualLite Armadillo2 Board")

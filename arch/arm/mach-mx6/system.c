@@ -23,11 +23,14 @@
 #include <linux/regulator/consumer.h>
 #include <linux/pmic_external.h>
 #include <linux/clockchips.h>
+#include <linux/hrtimer.h>
+#include <linux/tick.h>
 #include <asm/io.h>
 #include <mach/hardware.h>
 #include <mach/clock.h>
 #include <asm/proc-fns.h>
 #include <asm/system.h>
+#include <asm/hardware/gic.h>
 #include "crm_regs.h"
 #include "regs-anadig.h"
 
@@ -46,17 +49,24 @@
 #define MODULE_SFTRST		(1 << 31)
 
 extern unsigned int gpc_wake_irq[4];
-extern int mx6q_revision(void);
-
-static unsigned int cpu_idle_mask;
 
 static void __iomem *gpc_base = IO_ADDRESS(GPC_BASE_ADDR);
 
+int wait_mode_arm_podf;
 volatile unsigned int num_cpu_idle;
 volatile unsigned int num_cpu_idle_lock = 0x0;
+int wait_mode_arm_podf;
+int cur_arm_podf;
+bool arm_mem_clked_in_wait;
+void arch_idle_with_workaround(int cpu);
 
-extern void mx6_wait(void *num_cpu_idle_lock, void *num_cpu_idle);
+extern void mx6_wait(void *num_cpu_idle_lock, void *num_cpu_idle, \
+				int wait_arm_podf, int cur_arm_podf);
 extern bool enable_wait_mode;
+extern int low_bus_freq_mode;
+extern int audio_bus_freq_mode;
+extern bool mem_clk_on_in_wait;
+extern int chip_rev;
 
 void gpc_set_wakeup(unsigned int irq[4])
 {
@@ -74,7 +84,7 @@ void mxc_cpu_lp_set(enum mxc_cpu_pwr_mode mode)
 
 	int stop_mode = 0;
 	void __iomem *anatop_base = IO_ADDRESS(ANATOP_BASE_ADDR);
-	u32 ccm_clpcr, anatop_val;
+	u32 ccm_clpcr, anatop_val, reg;
 
 	ccm_clpcr = __raw_readl(MXC_CCM_CLPCR) & ~(MXC_CCM_CLPCR_LPM_MASK);
 
@@ -91,21 +101,33 @@ void mxc_cpu_lp_set(enum mxc_cpu_pwr_mode mode)
 			ccm_clpcr &= ~MXC_CCM_CLPCR_VSTBY;
 			ccm_clpcr &= ~MXC_CCM_CLPCR_SBYOS;
 			ccm_clpcr |= 0x1 << MXC_CCM_CLPCR_LPM_OFFSET;
-			ccm_clpcr |= MXC_CCM_CLPCR_BYP_MMDC_CH1_LPM_HS;
+			if (cpu_is_mx6sl()) {
+				ccm_clpcr |= MXC_CCM_CLPCR_BYP_MMDC_CH0_LPM_HS;
+				ccm_clpcr |= MXC_CCM_CLPCR_BYPASS_PMIC_VFUNC_READY;
+			} else
+				ccm_clpcr |= MXC_CCM_CLPCR_BYP_MMDC_CH1_LPM_HS;
 			stop_mode = 0;
 		} else if (mode == STOP_POWER_OFF) {
 			ccm_clpcr |= 0x2 << MXC_CCM_CLPCR_LPM_OFFSET;
 			ccm_clpcr |= 0x3 << MXC_CCM_CLPCR_STBY_COUNT_OFFSET;
 			ccm_clpcr |= MXC_CCM_CLPCR_VSTBY;
 			ccm_clpcr |= MXC_CCM_CLPCR_SBYOS;
-			ccm_clpcr |= MXC_CCM_CLPCR_BYP_MMDC_CH1_LPM_HS;
+			if (cpu_is_mx6sl()) {
+				ccm_clpcr |= MXC_CCM_CLPCR_BYP_MMDC_CH0_LPM_HS;
+				ccm_clpcr |= MXC_CCM_CLPCR_BYPASS_PMIC_VFUNC_READY;
+			} else
+				ccm_clpcr |= MXC_CCM_CLPCR_BYP_MMDC_CH1_LPM_HS;
 			stop_mode = 1;
 		} else {
 			ccm_clpcr |= 0x2 << MXC_CCM_CLPCR_LPM_OFFSET;
 			ccm_clpcr |= 0x3 << MXC_CCM_CLPCR_STBY_COUNT_OFFSET;
 			ccm_clpcr |= MXC_CCM_CLPCR_VSTBY;
 			ccm_clpcr |= MXC_CCM_CLPCR_SBYOS;
-			ccm_clpcr |= MXC_CCM_CLPCR_BYP_MMDC_CH1_LPM_HS;
+			if (cpu_is_mx6sl()) {
+				ccm_clpcr |= MXC_CCM_CLPCR_BYP_MMDC_CH0_LPM_HS;
+				ccm_clpcr |= MXC_CCM_CLPCR_BYPASS_PMIC_VFUNC_READY;
+			} else
+				ccm_clpcr |= MXC_CCM_CLPCR_BYP_MMDC_CH1_LPM_HS;
 			stop_mode = 2;
 		}
 		break;
@@ -123,19 +145,22 @@ void mxc_cpu_lp_set(enum mxc_cpu_pwr_mode mode)
 		/* Power down and power up sequence */
 		__raw_writel(0xFFFFFFFF, gpc_base + GPC_PGC_CPU_PUPSCR_OFFSET);
 		__raw_writel(0xFFFFFFFF, gpc_base + GPC_PGC_CPU_PDNSCR_OFFSET);
-
-		/* dormant mode, need to power off the arm core */
 		if (stop_mode == 2) {
+			/* dormant mode, need to power off the arm core */
 			__raw_writel(0x1, gpc_base + GPC_PGC_CPU_PDN_OFFSET);
-			__raw_writel(0x1, gpc_base + GPC_PGC_GPU_PGCR_OFFSET);
-			__raw_writel(0x1, gpc_base + GPC_CNTR_OFFSET);
-			if (cpu_is_mx6q()) {
-				/* Enable weak 2P5 linear regulator */
-				anatop_val = __raw_readl(anatop_base +
-					HW_ANADIG_REG_2P5);
-				anatop_val |= BM_ANADIG_REG_2P5_ENABLE_WEAK_LINREG;
-				__raw_writel(anatop_val, anatop_base +
-					HW_ANADIG_REG_2P5);
+			if (cpu_is_mx6q() || cpu_is_mx6dl()) {
+				/* If stop_mode_config is clear, then 2P5 will be off,
+				need to enable weak 2P5, as DDR IO need 2P5 as
+				pre-driver */
+				if ((__raw_readl(anatop_base + HW_ANADIG_ANA_MISC0)
+					& BM_ANADIG_ANA_MISC0_STOP_MODE_CONFIG) == 0) {
+					/* Enable weak 2P5 linear regulator */
+					anatop_val = __raw_readl(anatop_base +
+						HW_ANADIG_REG_2P5);
+					anatop_val |= BM_ANADIG_REG_2P5_ENABLE_WEAK_LINREG;
+					__raw_writel(anatop_val, anatop_base +
+						HW_ANADIG_REG_2P5);
+				}
 				if (mx6q_revision() != IMX_CHIP_REVISION_1_0) {
 					/* Enable fet_odrive */
 					anatop_val = __raw_readl(anatop_base +
@@ -144,17 +169,59 @@ void mxc_cpu_lp_set(enum mxc_cpu_pwr_mode mode)
 					__raw_writel(anatop_val, anatop_base +
 						HW_ANADIG_REG_CORE);
 				}
+			} else {
+				/* Disable VDDHIGH_IN to VDDSNVS_IN power path,
+				 * only used when VDDSNVS_IN is powered by dedicated
+				 * power rail */
+				anatop_val = __raw_readl(anatop_base +
+					HW_ANADIG_ANA_MISC0);
+				anatop_val |= BM_ANADIG_ANA_MISC0_RTC_RINGOSC_EN;
+				__raw_writel(anatop_val, anatop_base +
+					HW_ANADIG_ANA_MISC0);
+				/* We need to allow the memories to be clock gated
+				 * in STOP mode, else the power consumption will
+				 * be very high. */
+				reg = __raw_readl(MXC_CCM_CGPR);
+				reg |= MXC_CCM_CGPR_MEM_IPG_STOP_MASK;
+				__raw_writel(reg, MXC_CCM_CGPR);
 			}
-			if (cpu_is_mx6q())
+			/* DL's TO1.0 can't support DSM mode due to ipg glitch */
+			if (mx6dl_revision() != IMX_CHIP_REVISION_1_0)
 				__raw_writel(__raw_readl(MXC_CCM_CCR) |
 					MXC_CCM_CCR_RBC_EN, MXC_CCM_CCR);
+
 			/* Make sure we clear WB_COUNT and re-config it */
 			__raw_writel(__raw_readl(MXC_CCM_CCR) &
-				(~MXC_CCM_CCR_WB_COUNT_MASK), MXC_CCM_CCR);
-			udelay(50);
-			__raw_writel(__raw_readl(MXC_CCM_CCR) | (0x1 <<
-				MXC_CCM_CCR_WB_COUNT_OFFSET), MXC_CCM_CCR);
+				(~MXC_CCM_CCR_WB_COUNT_MASK) &
+				(~MXC_CCM_CCR_REG_BYPASS_CNT_MASK), MXC_CCM_CCR);
+			udelay(60);
+			/* Reconfigurate WB and RBC counter */
+			__raw_writel(__raw_readl(MXC_CCM_CCR) |
+				(0x1 << MXC_CCM_CCR_WB_COUNT_OFFSET) |
+				(0x20 << MXC_CCM_CCR_REG_BYPASS_CNT_OFFSET), MXC_CCM_CCR);
+
+			/* Set WB_PER enable */
 			ccm_clpcr |= MXC_CCM_CLPCR_WB_PER_AT_LPM;
+		}
+		if (cpu_is_mx6sl() ||
+			(mx6q_revision() > IMX_CHIP_REVISION_1_1) ||
+			(mx6dl_revision() > IMX_CHIP_REVISION_1_0)) {
+			u32 reg;
+			/* We need to allow the memories to be clock gated
+			  * in STOP mode, else the power consumption will
+			  * be very high.
+			  */
+			reg = __raw_readl(MXC_CCM_CGPR);
+			reg |= MXC_CCM_CGPR_MEM_IPG_STOP_MASK;
+			if (!cpu_is_mx6sl()) {
+				/*
+				  * For MX6QTO1.2 or later and MX6DLTO1.1 or later,
+				  * ensure that the CCM_CGPR bit 17 is cleared before
+				  * dormant mode is entered.
+				  */
+				reg &= ~MXC_CCM_CGPR_WAIT_MODE_FIX;
+			}
+			__raw_writel(reg, MXC_CCM_CGPR);
 		}
 	}
 	__raw_writel(ccm_clpcr, MXC_CCM_CLPCR);
@@ -162,24 +229,132 @@ void mxc_cpu_lp_set(enum mxc_cpu_pwr_mode mode)
 
 extern int tick_broadcast_oneshot_active(void);
 
+void ca9_do_idle(void)
+{
+	do {
+		cpu_do_idle();
+	} while (__raw_readl(gic_cpu_base_addr + GIC_CPU_HIGHPRI) == 1023);
+}
+
+void arch_idle_single_core(void)
+{
+	u32 reg;
+
+	if (cpu_is_mx6dl() && chip_rev > IMX_CHIP_REVISION_1_0) {
+		/*
+		  * MX6DLS TO1.1 has the HW fix for the WAIT mode issue.
+		  * Ensure that the CGPR bit 17 is set to enable the fix.
+		  */
+		reg = __raw_readl(MXC_CCM_CGPR);
+		reg |= MXC_CCM_CGPR_WAIT_MODE_FIX;
+		__raw_writel(reg, MXC_CCM_CGPR);
+
+		ca9_do_idle();
+	} else {
+		/*
+		  * Implement the 12:5 ARM:IPG_CLK ratio
+		  * workaround for the WAIT mode issue.
+		  * We can directly use the divider to drop the ARM
+		  * core freq in a single core environment.
+		  *  Set the ARM_PODF to get the max freq possible
+		  * to avoid the WAIT mode issue when IPG is at 66MHz.
+		  */
+		if (cpu_is_mx6sl()) {
+			reg = __raw_readl(MXC_CCM_CGPR);
+			reg |= MXC_CCM_CGPR_MEM_IPG_STOP_MASK;
+			__raw_writel(reg, MXC_CCM_CGPR);
+		}
+		__raw_writel(wait_mode_arm_podf, MXC_CCM_CACRR);
+		while (__raw_readl(MXC_CCM_CDHIPR))
+			;
+		ca9_do_idle();
+
+		__raw_writel(cur_arm_podf - 1, MXC_CCM_CACRR);
+	}
+}
+
+void arch_idle_with_workaround(cpu)
+{
+	u32 podf = wait_mode_arm_podf;
+
+	*((char *)(&num_cpu_idle_lock) + (char)cpu) = 0x0;
+
+	if (low_bus_freq_mode || audio_bus_freq_mode)
+		/* In case when IPG is at 12MHz, we need to ensure that
+		  * ARM is at 24MHz, as the max freq ARM can run at is
+		  *~28.8MHz.
+		  */
+		podf = 0;
+
+	mx6_wait((void *)&num_cpu_idle_lock,
+		(void *)&num_cpu_idle,
+		podf, cur_arm_podf - 1);
+
+}
+
+void arch_idle_multi_core(void)
+{
+	u32 reg;
+	int cpu = smp_processor_id();
+
+#ifdef CONFIG_LOCAL_TIMERS
+	if (!tick_broadcast_oneshot_active()
+		|| !tick_oneshot_mode_active())
+		return;
+
+	clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_ENTER, &cpu);
+#endif
+	/* iMX6Q and iMX6DL */
+	if ((cpu_is_mx6q() && chip_rev >= IMX_CHIP_REVISION_1_2) ||
+		(cpu_is_mx6dl() && chip_rev >= IMX_CHIP_REVISION_1_1)) {
+		/*
+		  * This code should only be executed on MX6QTO1.2 or later
+		  * and MX6DL TO1.1 or later.
+		  * These chips have the HW fix for the WAIT mode issue.
+		  * Ensure that the CGPR bit 17 is set to enable the fix.
+		  */
+
+		reg = __raw_readl(MXC_CCM_CGPR);
+		reg |= MXC_CCM_CGPR_WAIT_MODE_FIX;
+		__raw_writel(reg, MXC_CCM_CGPR);
+
+		ca9_do_idle();
+	} else
+		arch_idle_with_workaround(cpu);
+#ifdef CONFIG_LOCAL_TIMERS
+	clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_EXIT, &cpu);
+#endif
+
+}
+
 void arch_idle(void)
 {
 	if (enable_wait_mode) {
-#ifdef CONFIG_LOCAL_TIMERS
-		int cpu = smp_processor_id();
-		if (!tick_broadcast_oneshot_active())
-			return;
-
-		clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_ENTER, &cpu);
-#endif
-		*((char *)(&num_cpu_idle_lock) + smp_processor_id()) = 0x0;
 		mxc_cpu_lp_set(WAIT_UNCLOCKED_POWER_OFF);
-		mx6_wait((void *)&num_cpu_idle_lock, (void *)&num_cpu_idle);
-#ifdef CONFIG_LOCAL_TIMERS
-		clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_EXIT, &cpu);
-#endif
-	} else
-		cpu_do_idle();
+		if ((mem_clk_on_in_wait || arm_mem_clked_in_wait)) {
+			u32 reg;
+			/*
+			  * MX6SL, MX6Q (TO1.2 or later) and
+			  * MX6DL (TO1.1 or later) have a bit in CCM_CGPR that
+			  * when cleared keeps the clocks to memories ON
+			  * when ARM is in WFI. This mode can be used when
+			  * IPG clock is very low (12MHz) and the ARM:IPG ratio
+			  * perhaps cannot be maintained.
+			  */
+			reg = __raw_readl(MXC_CCM_CGPR);
+			reg &= ~MXC_CCM_CGPR_MEM_IPG_STOP_MASK;
+			__raw_writel(reg, MXC_CCM_CGPR);
+
+			ca9_do_idle();
+		} else if (num_possible_cpus() == 1)
+			/* iMX6SL or iMX6DLS */
+			arch_idle_single_core();
+		else
+			arch_idle_multi_core();
+	} else {
+		mxc_cpu_lp_set(WAIT_CLOCKED);
+		ca9_do_idle();
+	}
 }
 
 static int __mxs_reset_block(void __iomem *hwreg, int just_enable)

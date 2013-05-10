@@ -137,7 +137,7 @@ typedef enum _gceCORE
 }
 gceCORE;
 
-#define gcdCORE_COUNT               3
+#define gcdMAX_GPU_COUNT               3
 
 /*******************************************************************************
 **
@@ -1226,8 +1226,8 @@ gckOS_BroadcastCalibrateSpeed(
 **      gckOS Os
 **          Pointer to a gckOS object.ß
 **
-**      gceCORE Core
-**          Core type.
+**      gckCORE Core
+**          GPU whose power is set.
 **
 **      gctBOOL Clock
 **          gcvTRUE to turn on the clock, or gcvFALSE to turn off the clock.
@@ -1245,6 +1245,12 @@ gckOS_SetGPUPower(
     IN gceCORE Core,
     IN gctBOOL Clock,
     IN gctBOOL Power
+    );
+
+gceSTATUS
+gckOS_ResetGPU(
+    IN gckOS Os,
+    IN gceCORE Core
     );
 
 /*******************************************************************************
@@ -2002,6 +2008,11 @@ gceSTATUS
 gckHARDWARE_IsFeatureAvailable(
     IN gckHARDWARE Hardware,
     IN gceFEATURE Feature
+    );
+
+gceSTATUS
+gckHARDWARE_DumpMMUException(
+    IN gckHARDWARE Hardware
     );
 
 #if !gcdENABLE_VG

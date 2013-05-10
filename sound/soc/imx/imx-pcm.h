@@ -33,6 +33,7 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/dmaengine.h>
+#include <linux/mxc_asrc.h>
 
 #include <sound/core.h>
 #include <sound/initval.h>
@@ -41,8 +42,6 @@
 #include <sound/soc.h>
 
 #include <mach/dma.h>
-
-#include "imx-ssi.h"
 
 struct imx_pcm_runtime_data {
 	int period_bytes;
@@ -55,16 +54,17 @@ struct imx_pcm_runtime_data {
 	struct dma_async_tx_descriptor *desc;
 	struct dma_chan *dma_chan;
 	struct imx_dma_data dma_data;
+	int asrc_enable;
 
 #if defined(CONFIG_MXC_ASRC) || defined(CONFIG_IMX_HAVE_PLATFORM_IMX_ASRC)
-	int asrc_index;
-	int asrc_enable;
+	enum asrc_pair_index asrc_index;
 	struct dma_async_tx_descriptor *asrc_desc;
 	struct dma_chan *asrc_dma_chan;
 	struct imx_dma_data asrc_dma_data;
 	struct dma_async_tx_descriptor *asrc_p2p_desc;
 	struct dma_chan *asrc_p2p_dma_chan;
 	struct imx_dma_data asrc_p2p_dma_data;
+	struct asrc_p2p_params *p2p;
 #endif
 };
 #endif

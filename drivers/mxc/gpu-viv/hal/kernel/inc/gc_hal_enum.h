@@ -144,6 +144,8 @@ typedef enum _gceFEATURE
     gcvFEATURE_RS_YUV_TARGET,
     gcvFEATURE_2D_FC_SOURCE,
 	gcvFEATURE_PE_DITHER_FIX,
+    gcvFEATURE_2D_YUV_SEPARATE_STRIDE,
+    gcvFEATURE_FRUSTUM_CLIP_FIX,
 }
 gceFEATURE;
 
@@ -262,6 +264,13 @@ typedef enum _gceSURF_ROTATION
     gcvSURF_FLIP_Y,
 }
 gceSURF_ROTATION;
+
+typedef enum _gceMIPMAP_IMAGE_FORMAT
+{
+    gcvUNKNOWN_MIPMAP_IMAGE_FORMAT  = -2
+}
+gceMIPMAP_IMAGE_FORMAT;
+
 
 /* Surface formats. */
 typedef enum _gceSURF_FORMAT
@@ -627,6 +636,15 @@ typedef enum _gce2D_TILE_STATUS_CONFIG
     gcv2D_TSC_DOWN_SAMPLER  = 0x00000004,
 }
 gce2D_TILE_STATUS_CONFIG;
+
+typedef enum _gce2D_QUERY
+{
+    gcv2D_QUERY_RGB_ADDRESS_MAX_ALIGN       = 0,
+    gcv2D_QUERY_RGB_STRIDE_MAX_ALIGN,
+    gcv2D_QUERY_YUV_ADDRESS_MAX_ALIGN,
+    gcv2D_QUERY_YUV_STRIDE_MAX_ALIGN,
+}
+gce2D_QUERY;
 
 #ifndef VIVANTE_NO_3D
 /* Texture functions. */

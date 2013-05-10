@@ -49,11 +49,39 @@
 #include <mach/arc_otg.h>
 #include <mach/hardware.h>
 #include <mach/mxc.h>
+typedef void (*driver_vbus_func)(bool);
 
 void __iomem *imx_otg_base;
+static  driver_vbus_func s_driver_vbus;
+
+EXPORT_SYMBOL(imx_otg_base);
 
 #define MXC_NUMBER_USB_TRANSCEIVER 6
 struct fsl_xcvr_ops *g_xc_ops[MXC_NUMBER_USB_TRANSCEIVER] = { NULL };
+
+bool usb_icbug_swfix_need(void)
+{
+	if (cpu_is_mx6sl())
+		return false;
+	else if ((mx6q_revision() > IMX_CHIP_REVISION_1_1))
+		return false;
+	else if ((mx6dl_revision() > IMX_CHIP_REVISION_1_0))
+		return false;
+	return true;
+}
+EXPORT_SYMBOL(usb_icbug_swfix_need);
+
+void mx6_set_host1_vbus_func(driver_vbus_func driver_vbus)
+{
+	s_driver_vbus = driver_vbus;
+}
+
+void mx6_set_usb_host1_vbus_func(driver_vbus_func *driver_vbus)
+{
+	*driver_vbus = s_driver_vbus;
+}
+EXPORT_SYMBOL(mx6_set_usb_host1_vbus_func);
+
 
 enum fsl_usb2_modes get_usb_mode(struct fsl_usb2_platform_data *pdata)
 {
@@ -88,7 +116,7 @@ static int fsl_check_usbclk(void)
 
 	usb_ahb_clk = clk_get(NULL, "usb_ahb_clk");
 	if (clk_enable(usb_ahb_clk)) {
-		if (cpu_is_mx6q() || cpu_is_mx6dl())
+		if (cpu_is_mx6())
 			return 0; /* there is no ahb clock at mx6 */
 		printk(KERN_ERR "clk_enable(usb_ahb_clk) failed\n");
 		return -EINVAL;
@@ -97,7 +125,7 @@ static int fsl_check_usbclk(void)
 
 	usb_clk = clk_get(NULL, "usb_clk");
 	if (clk_enable(usb_clk)) {
-		if (cpu_is_mx6q() || cpu_is_mx6dl())
+		if (cpu_is_mx6())
 			return 0; /* there is usb_clk at mx6 */
 		printk(KERN_ERR "clk_enable(usb_clk) failed\n");
 		return -EINVAL;
@@ -502,7 +530,7 @@ int fsl_usb_host_init(struct platform_device *pdev)
 
 	if (usb_register_remote_wakeup(pdev))
 		pr_debug("%s port is not a wakeup source.\n", pdata->name);
-	if (!(cpu_is_mx6q() || cpu_is_mx6dl())) {
+	if (!(cpu_is_mx6())) {
 		if (xops->xcvr_type == PORTSC_PTS_SERIAL) {
 			if (cpu_is_mx35()) {
 				usbh2_set_serial_xcvr();
@@ -814,7 +842,7 @@ int usbotg_init(struct platform_device *pdev)
 			return -EINVAL;
 		if (xops->init)
 			xops->init(xops);
-		if (!((cpu_is_mx6q() || cpu_is_mx6dl()))) {
+		if (!(cpu_is_mx6())) {
 			UOG_PORTSC1 = UOG_PORTSC1 & ~PORTSC_PHCD;
 
 

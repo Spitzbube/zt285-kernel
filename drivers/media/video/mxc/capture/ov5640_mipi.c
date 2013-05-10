@@ -44,6 +44,9 @@
 #define OV5640_XCLK_MIN 6000000
 #define OV5640_XCLK_MAX 24000000
 
+#define OV5640_CHIP_ID_HIGH_BYTE	0x300A
+#define OV5640_CHIP_ID_LOW_BYTE		0x300B
+
 enum ov5640_mode {
 	ov5640_mode_MIN = 0,
 	ov5640_mode_VGA_640_480 = 0,
@@ -54,7 +57,8 @@ enum ov5640_mode {
 	ov5640_mode_1080P_1920_1080 = 5,
 	ov5640_mode_QSXGA_2592_1944 = 6,
 	ov5640_mode_QCIF_176_144 = 7,
-	ov5640_mode_MAX = 7,
+	ov5640_mode_XGA_1024_768 = 8,
+	ov5640_mode_MAX = 8,
 	ov5640_mode_INIT = 0xff, /*only for sensor init*/
 };
 
@@ -81,7 +85,7 @@ struct ov5640_mode_info {
 /*!
  * Maintains the information on the current state of the sesor.
  */
-struct sensor_data ov5640_data;
+static struct sensor_data ov5640_data;
 
 static struct reg_value ov5640_init_setting_30fps_VGA[] = {
 
@@ -169,7 +173,7 @@ static struct reg_value ov5640_init_setting_30fps_VGA[] = {
 	{0x583b, 0x28, 0, 0}, {0x583c, 0x42, 0, 0}, {0x583d, 0xce, 0, 0},
 	{0x5025, 0x00, 0, 0}, {0x3a0f, 0x30, 0, 0}, {0x3a10, 0x28, 0, 0},
 	{0x3a1b, 0x30, 0, 0}, {0x3a1e, 0x26, 0, 0}, {0x3a11, 0x60, 0, 0},
-	{0x3a1f, 0x14, 0, 0}, {0x3008, 0x02, 0, 0}, {0x3c00, 0x04, 0, 0},
+	{0x3a1f, 0x14, 0, 0}, {0x3008, 0x02, 0, 0}, {0x3c00, 0x04, 0, 300},
 };
 
 static struct reg_value ov5640_setting_30fps_VGA_640_480[] = {
@@ -195,7 +199,7 @@ static struct reg_value ov5640_setting_30fps_VGA_640_480[] = {
 };
 
 static struct reg_value ov5640_setting_15fps_VGA_640_480[] = {
-	{0x3035, 0x24, 0, 0}, {0x3036, 0x38, 0, 0}, {0x3c07, 0x08, 0, 0},
+	{0x3035, 0x22, 0, 0}, {0x3036, 0x38, 0, 0}, {0x3c07, 0x08, 0, 0},
 	{0x3c09, 0x1c, 0, 0}, {0x3c0a, 0x9c, 0, 0}, {0x3c0b, 0x40, 0, 0},
 	{0x3820, 0x41, 0, 0}, {0x3821, 0x07, 0, 0}, {0x3814, 0x31, 0, 0},
 	{0x3815, 0x31, 0, 0}, {0x3800, 0x00, 0, 0}, {0x3801, 0x00, 0, 0},
@@ -212,7 +216,53 @@ static struct reg_value ov5640_setting_15fps_VGA_640_480[] = {
 	{0x3a0d, 0x04, 0, 0}, {0x3a14, 0x03, 0, 0}, {0x3a15, 0xd8, 0, 0},
 	{0x4001, 0x02, 0, 0}, {0x4004, 0x02, 0, 0}, {0x4713, 0x03, 0, 0},
 	{0x4407, 0x04, 0, 0}, {0x460b, 0x35, 0, 0}, {0x460c, 0x22, 0, 0},
+	{0x3824, 0x02, 0, 0}, {0x5001, 0xa3, 0, 0},
+};
+
+static struct reg_value ov5640_setting_30fps_XGA_1024_768[] = {
+
+	{0x3035, 0x14, 0, 0}, {0x3036, 0x38, 0, 0}, {0x3c07, 0x08, 0, 0},
+	{0x3c09, 0x1c, 0, 0}, {0x3c0a, 0x9c, 0, 0}, {0x3c0b, 0x40, 0, 0},
+	{0x3820, 0x41, 0, 0}, {0x3821, 0x07, 0, 0}, {0x3814, 0x31, 0, 0},
+	{0x3815, 0x31, 0, 0}, {0x3800, 0x00, 0, 0}, {0x3801, 0x00, 0, 0},
+	{0x3802, 0x00, 0, 0}, {0x3803, 0x04, 0, 0}, {0x3804, 0x0a, 0, 0},
+	{0x3805, 0x3f, 0, 0}, {0x3806, 0x07, 0, 0}, {0x3807, 0x9b, 0, 0},
+	{0x3808, 0x02, 0, 0}, {0x3809, 0x80, 0, 0}, {0x380a, 0x01, 0, 0},
+	{0x380b, 0xe0, 0, 0}, {0x380c, 0x07, 0, 0}, {0x380d, 0x68, 0, 0},
+	{0x380e, 0x04, 0, 0}, {0x380f, 0x38, 0, 0}, {0x3810, 0x00, 0, 0},
+	{0x3811, 0x10, 0, 0}, {0x3812, 0x00, 0, 0}, {0x3813, 0x06, 0, 0},
+	{0x3618, 0x00, 0, 0}, {0x3612, 0x29, 0, 0}, {0x3708, 0x64, 0, 0},
+	{0x3709, 0x52, 0, 0}, {0x370c, 0x03, 0, 0}, {0x3a02, 0x03, 0, 0},
+	{0x3a03, 0xd8, 0, 0}, {0x3a08, 0x01, 0, 0}, {0x3a09, 0x0e, 0, 0},
+	{0x3a0a, 0x00, 0, 0}, {0x3a0b, 0xf6, 0, 0}, {0x3a0e, 0x03, 0, 0},
+	{0x3a0d, 0x04, 0, 0}, {0x3a14, 0x03, 0, 0}, {0x3a15, 0xd8, 0, 0},
+	{0x4001, 0x02, 0, 0}, {0x4004, 0x02, 0, 0}, {0x4713, 0x03, 0, 0},
+	{0x4407, 0x04, 0, 0}, {0x460b, 0x35, 0, 0}, {0x460c, 0x22, 0, 0},
 	{0x3824, 0x02, 0, 0}, {0x5001, 0xa3, 0, 0}, {0x3503, 0x00, 0, 0},
+	{0x3808, 0x04, 0, 0}, {0x3809, 0x00, 0, 0}, {0x380a, 0x03, 0, 0},
+	{0x380b, 0x00, 0, 0}, {0x3035, 0x12, 0, 0},
+};
+
+static struct reg_value ov5640_setting_15fps_XGA_1024_768[] = {
+	{0x3035, 0x22, 0, 0}, {0x3036, 0x38, 0, 0}, {0x3c07, 0x08, 0, 0},
+	{0x3c09, 0x1c, 0, 0}, {0x3c0a, 0x9c, 0, 0}, {0x3c0b, 0x40, 0, 0},
+	{0x3820, 0x41, 0, 0}, {0x3821, 0x07, 0, 0}, {0x3814, 0x31, 0, 0},
+	{0x3815, 0x31, 0, 0}, {0x3800, 0x00, 0, 0}, {0x3801, 0x00, 0, 0},
+	{0x3802, 0x00, 0, 0}, {0x3803, 0x04, 0, 0}, {0x3804, 0x0a, 0, 0},
+	{0x3805, 0x3f, 0, 0}, {0x3806, 0x07, 0, 0}, {0x3807, 0x9b, 0, 0},
+	{0x3808, 0x02, 0, 0}, {0x3809, 0x80, 0, 0}, {0x380a, 0x01, 0, 0},
+	{0x380b, 0xe0, 0, 0}, {0x380c, 0x07, 0, 0}, {0x380d, 0x68, 0, 0},
+	{0x380e, 0x03, 0, 0}, {0x380f, 0xd8, 0, 0}, {0x3810, 0x00, 0, 0},
+	{0x3811, 0x10, 0, 0}, {0x3812, 0x00, 0, 0}, {0x3813, 0x06, 0, 0},
+	{0x3618, 0x00, 0, 0}, {0x3612, 0x29, 0, 0}, {0x3708, 0x64, 0, 0},
+	{0x3709, 0x52, 0, 0}, {0x370c, 0x03, 0, 0}, {0x3a02, 0x03, 0, 0},
+	{0x3a03, 0xd8, 0, 0}, {0x3a08, 0x01, 0, 0}, {0x3a09, 0x27, 0, 0},
+	{0x3a0a, 0x00, 0, 0}, {0x3a0b, 0xf6, 0, 0}, {0x3a0e, 0x03, 0, 0},
+	{0x3a0d, 0x04, 0, 0}, {0x3a14, 0x03, 0, 0}, {0x3a15, 0xd8, 0, 0},
+	{0x4001, 0x02, 0, 0}, {0x4004, 0x02, 0, 0}, {0x4713, 0x03, 0, 0},
+	{0x4407, 0x04, 0, 0}, {0x460b, 0x35, 0, 0}, {0x460c, 0x22, 0, 0},
+	{0x3824, 0x02, 0, 0}, {0x5001, 0xa3, 0, 0}, {0x3808, 0x04, 0, 0},
+	{0x3809, 0x00, 0, 0}, {0x380a, 0x03, 0, 0}, {0x380b, 0x00, 0, 0},
 };
 
 static struct reg_value ov5640_setting_30fps_QVGA_320_240[] = {
@@ -237,7 +287,7 @@ static struct reg_value ov5640_setting_30fps_QVGA_320_240[] = {
 };
 
 static struct reg_value ov5640_setting_15fps_QVGA_320_240[] = {
-	{0x3035, 0x24, 0, 0}, {0x3036, 0x38, 0, 0}, {0x3c07, 0x08, 0, 0},
+	{0x3035, 0x22, 0, 0}, {0x3036, 0x38, 0, 0}, {0x3c07, 0x08, 0, 0},
 	{0x3c09, 0x1c, 0, 0}, {0x3c0a, 0x9c, 0, 0}, {0x3c0b, 0x40, 0, 0},
 	{0x3820, 0x41, 0, 0}, {0x3821, 0x07, 0, 0}, {0x3814, 0x31, 0, 0},
 	{0x3815, 0x31, 0, 0}, {0x3800, 0x00, 0, 0}, {0x3801, 0x00, 0, 0},
@@ -549,6 +599,9 @@ static struct ov5640_mode_info ov5640_mode_info_data[2][ov5640_mode_MAX + 1] = {
 		{ov5640_mode_QCIF_176_144, 176, 144,
 		ov5640_setting_15fps_QCIF_176_144,
 		ARRAY_SIZE(ov5640_setting_15fps_QCIF_176_144)},
+		{ov5640_mode_XGA_1024_768, 1024, 768,
+		ov5640_setting_15fps_XGA_1024_768,
+		ARRAY_SIZE(ov5640_setting_15fps_XGA_1024_768)},
 	},
 	{
 		{ov5640_mode_VGA_640_480,    640,  480,
@@ -573,6 +626,9 @@ static struct ov5640_mode_info ov5640_mode_info_data[2][ov5640_mode_MAX + 1] = {
 		{ov5640_mode_QCIF_176_144, 176, 144,
 		ov5640_setting_30fps_QCIF_176_144,
 		ARRAY_SIZE(ov5640_setting_30fps_QCIF_176_144)},
+		{ov5640_mode_XGA_1024_768, 1024, 768,
+		ov5640_setting_30fps_XGA_1024_768,
+		ARRAY_SIZE(ov5640_setting_30fps_XGA_1024_768)},
 	},
 };
 
@@ -668,7 +724,7 @@ int OV5640_get_sysclk(void)
 {
 	 /* calculate sysclk */
 	int temp1, temp2;
-	int Multiplier, PreDiv, VCO, SysDiv, Pll_rdiv, Bit_div2x, sclk_rdiv, sysclk;
+	int Multiplier, PreDiv, VCO, SysDiv, Pll_rdiv, Bit_div2x = 1, sclk_rdiv, sysclk;
 	u8 temp;
 
 	int sclk_rdiv_map[] = {1, 2, 4, 8};
@@ -907,6 +963,15 @@ bool binning_on(void)
 		return true;
 	else
 		return false;
+}
+
+static void ov5640_set_virtual_channel(int channel)
+{
+	u8 channel_id;
+
+	ov5640_read_reg(0x4814, &channel_id);
+	channel_id &= ~(3 << 6);
+	ov5640_write_reg(0x4814, channel_id | (channel << 6));
 }
 
 static int ov5640_init_mode(enum ov5640_frame_rate frame_rate,
@@ -1164,6 +1229,7 @@ static int ov5640_init_mode(enum ov5640_frame_rate frame_rate,
 	OV5640_set_AE_target(AE_Target);
 	OV5640_get_light_frequency();
 	OV5640_set_bandingfilter();
+	ov5640_set_virtual_channel(ov5640_data.csi);
 
 	if (mipi_csi2_info) {
 		unsigned int i;
@@ -1547,7 +1613,8 @@ static int ioctl_g_chip_ident(struct v4l2_int_device *s, int *id)
 {
 	((struct v4l2_dbg_chip_ident *)id)->match.type =
 					V4L2_CHIP_MATCH_I2C_DRIVER;
-	strcpy(((struct v4l2_dbg_chip_ident *)id)->match.name, "ov5640_camera");
+	strcpy(((struct v4l2_dbg_chip_ident *)id)->match.name,
+		"ov5640_mipi_camera");
 
 	return 0;
 }
@@ -1604,7 +1671,7 @@ static int ioctl_dev_init(struct v4l2_int_device *s)
 	ov5640_data.mclk = tgt_xclk;
 
 	pr_debug("   Setting mclk to %d MHz\n", tgt_xclk / 1000000);
-	set_mclk_rate(&ov5640_data.mclk, ov5640_data.csi);
+	set_mclk_rate(&ov5640_data.mclk, ov5640_data.mclk_source);
 
 	/* Default camera frame rate is set in probe */
 	tgt_fps = sensor->streamcap.timeperframe.denominator /
@@ -1707,11 +1774,13 @@ static int ov5640_probe(struct i2c_client *client,
 {
 	int retval;
 	struct fsl_mxc_camera_platform_data *plat_data = client->dev.platform_data;
+	u8 chip_id_high, chip_id_low;
 
 	/* Set initial values for the sensor struct. */
 	memset(&ov5640_data, 0, sizeof(ov5640_data));
 	ov5640_data.mclk = 24000000; /* 6 - 54 MHz, typical 24MHz */
 	ov5640_data.mclk = plat_data->mclk;
+	ov5640_data.mclk_source = plat_data->mclk_source;
 	ov5640_data.csi = plat_data->csi;
 	ov5640_data.io_init = plat_data->io_init;
 
@@ -1732,7 +1801,8 @@ static int ov5640_probe(struct i2c_client *client,
 			regulator_set_voltage(io_regulator,
 					      OV5640_VOLTAGE_DIGITAL_IO,
 					      OV5640_VOLTAGE_DIGITAL_IO);
-			if (regulator_enable(io_regulator) != 0) {
+			retval = regulator_enable(io_regulator);
+			if (retval) {
 				pr_err("%s:io set voltage error\n", __func__);
 				goto err1;
 			} else {
@@ -1750,7 +1820,8 @@ static int ov5640_probe(struct i2c_client *client,
 			regulator_set_voltage(core_regulator,
 					      OV5640_VOLTAGE_DIGITAL_CORE,
 					      OV5640_VOLTAGE_DIGITAL_CORE);
-			if (regulator_enable(core_regulator) != 0) {
+			retval = regulator_enable(core_regulator);
+			if (retval) {
 				pr_err("%s:core set voltage error\n", __func__);
 				goto err2;
 			} else {
@@ -1768,7 +1839,8 @@ static int ov5640_probe(struct i2c_client *client,
 			regulator_set_voltage(analog_regulator,
 					      OV5640_VOLTAGE_ANALOG,
 					      OV5640_VOLTAGE_ANALOG);
-			if (regulator_enable(analog_regulator) != 0) {
+			retval = regulator_enable(analog_regulator);
+			if (retval) {
 				pr_err("%s:analog set voltage error\n",
 					__func__);
 				goto err3;
@@ -1783,6 +1855,25 @@ static int ov5640_probe(struct i2c_client *client,
 	if (plat_data->io_init)
 		plat_data->io_init();
 
+	if (plat_data->pwdn)
+		plat_data->pwdn(0);
+
+	retval = ov5640_read_reg(OV5640_CHIP_ID_HIGH_BYTE, &chip_id_high);
+	if (retval < 0 || chip_id_high != 0x56) {
+		pr_err("%s:cannot find camera\n", __func__);
+		retval = -ENODEV;
+		goto err4;
+	}
+	retval = ov5640_read_reg(OV5640_CHIP_ID_LOW_BYTE, &chip_id_low);
+	if (retval < 0 || chip_id_low != 0x40) {
+		pr_err("%s:cannot find camera\n", __func__);
+		retval = -ENODEV;
+		goto err4;
+	}
+
+	if (plat_data->pwdn)
+		plat_data->pwdn(1);
+
 	camera_plat = plat_data;
 
 	ov5640_int_device.priv = &ov5640_data;
@@ -1790,6 +1881,11 @@ static int ov5640_probe(struct i2c_client *client,
 
 	return retval;
 
+err4:
+	if (analog_regulator) {
+		regulator_disable(analog_regulator);
+		regulator_put(analog_regulator);
+	}
 err3:
 	if (core_regulator) {
 		regulator_disable(core_regulator);
@@ -1801,7 +1897,7 @@ err2:
 		regulator_put(io_regulator);
 	}
 err1:
-	return -1;
+	return retval;
 }
 
 /*!

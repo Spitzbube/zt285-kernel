@@ -883,8 +883,10 @@ typedef struct _gcsSTENCIL_INFO
 {
     gceSTENCIL_MODE         mode;
 
-    gctUINT8                mask;
-    gctUINT8                writeMask;
+    gctUINT8                maskFront;
+	gctUINT8                maskBack;
+    gctUINT8                writeMaskFront;
+    gctUINT8                writeMaskBack;
 
     gctUINT8                referenceFront;
 
@@ -915,9 +917,23 @@ gco3D_SetStencilMask(
     IN gctUINT8 Mask
     );
 
+/* Set stencil back mask. */
+gceSTATUS
+gco3D_SetStencilMaskBack(
+    IN gco3D Engine,
+    IN gctUINT8 Mask
+    );
+
 /* Set stencil write mask. */
 gceSTATUS
 gco3D_SetStencilWriteMask(
+    IN gco3D Engine,
+    IN gctUINT8 Mask
+    );
+
+/* Set stencil back write mask. */
+gceSTATUS
+gco3D_SetStencilWriteMaskBack(
     IN gco3D Engine,
     IN gctUINT8 Mask
     );
@@ -1171,6 +1187,25 @@ gceSTATUS
 gco3D_InvokeThreadWalker(
     IN gco3D Engine,
     IN gcsTHREAD_WALKER_INFO_PTR Info
+    );
+
+/* Set w clip and w plane limit value. */
+gceSTATUS
+gco3D_SetWClipEnable(
+	IN gco3D Engine,
+	IN gctBOOL Enable
+    );
+
+gceSTATUS
+gco3D_SetWPlaneLimitF(
+	IN gco3D Engine,
+	IN gctFLOAT Value
+    );
+
+gceSTATUS
+gco3D_SetWPlaneLimitX(
+	IN gco3D Engine,
+	IN gctFIXED_POINT Value
     );
 
 /*----------------------------------------------------------------------------*/
@@ -1437,6 +1472,7 @@ gceSTATUS
 gcoTEXTURE_AddMipMap(
     IN gcoTEXTURE Texture,
     IN gctINT Level,
+    IN gctINT imageFormat,
     IN gceSURF_FORMAT Format,
     IN gctUINT Width,
     IN gctUINT Height,
