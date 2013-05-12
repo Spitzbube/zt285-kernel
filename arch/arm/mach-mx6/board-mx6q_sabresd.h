@@ -324,6 +324,8 @@ static iomux_v3_cfg_t mx6q_sabresd_csi0_sensor_pads[] = {
 
 	MX6Q_PAD_SD1_DAT0__GPIO_1_16,		/* camera PWDN */
 	MX6Q_PAD_SD1_DAT1__GPIO_1_17,		/* camera RESET */
+
+	(iomux_v3_cfg_t)(0x040000500073434c),
 };
 
 static iomux_v3_cfg_t mx6q_sabresd_mipi_sensor_pads[] = {

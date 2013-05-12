@@ -201,9 +201,9 @@
 
 static struct clk *sata_clk;
 static struct clk *clko;
-static int mma8451_position = 1;
-static int mag3110_position = 2;
-static int max11801_mode = 1;
+//static int mma8451_position = 1;
+//static int mag3110_position = 2;
+//static int max11801_mode = 1;
 static int enable_lcd_ldb;
 
 
@@ -477,23 +477,39 @@ static struct platform_device sabresd_vwm8962_reg_devices = {
 };
 
 #if 1
-static struct wm8962_pdata es8388_config_data = {
-        //TODO
-    .gpio_init = {
-        [2] = WM8962_GPIO_FN_DMICCLK,
-        [4] = 0x8000 | WM8962_GPIO_FN_DMICDAT,
-    },
-};
+/*static*/ struct wm8962_pdata es8388_config_data;
 #endif
 
 static void mx6q_csi0_cam_powerdown(int powerdown)
 {
-	if (powerdown)
-		gpio_set_value(SABRESD_CSI0_PWN, 1);
-	else
-		gpio_set_value(SABRESD_CSI0_PWN, 0);
+	printk("mx6q_csi0_cam_powerdown : powerdown = %d\015\n", powerdown);
 
-	msleep(2);
+	if (powerdown)
+	{
+		gpio_set_value(SABRESD_CSI0_PWN, 1);
+		gpio_set_value(SABRESD_MIPICSI_PWN, 1);
+	}
+	else
+	{
+		gpio_set_value(SABRESD_CSI0_PWN, 0);
+		gpio_set_value(SABRESD_MIPICSI_PWN, 0);
+	}
+}
+
+static void mx6q_csi1_cam_powerdown(int powerdown)
+{
+	printk("mx6q_csi0_cam_powerdown : 0308 powerdown = %d\015\n", powerdown);
+
+	if (powerdown)
+	{
+		gpio_set_value(SABRESD_CSI0_PWN, 1);
+		gpio_set_value(SABRESD_MIPICSI_PWN, 1);
+	}
+	else
+	{
+		gpio_set_value(SABRESD_CSI0_PWN, 0);
+		gpio_set_value(SABRESD_MIPICSI_PWN, 0);
+	}
 }
 
 static void mx6q_csi0_io_init(void)
@@ -501,24 +517,20 @@ static void mx6q_csi0_io_init(void)
 	if (cpu_is_mx6q())
 		mxc_iomux_v3_setup_multiple_pads(mx6q_sabresd_csi0_sensor_pads,
 			ARRAY_SIZE(mx6q_sabresd_csi0_sensor_pads));
-	else if (cpu_is_mx6dl())
-		mxc_iomux_v3_setup_multiple_pads(mx6dl_sabresd_csi0_sensor_pads,
-			ARRAY_SIZE(mx6dl_sabresd_csi0_sensor_pads));
 
 	/* Camera reset */
 	gpio_request(SABRESD_CSI0_RST, "cam-reset");
 	gpio_direction_output(SABRESD_CSI0_RST, 1);
 
+	gpio_request(SABRESD_MIPICSI_PWN, "cam-pwdn2");
+	gpio_direction_output(SABRESD_MIPICSI_PWN, 1);
+	msleep(1);
+	gpio_set_value(SABRESD_MIPICSI_PWN, 1);
+
 	/* Camera power down */
 	gpio_request(SABRESD_CSI0_PWN, "cam-pwdn");
 	gpio_direction_output(SABRESD_CSI0_PWN, 1);
-	msleep(5);
-	gpio_set_value(SABRESD_CSI0_PWN, 0);
-	msleep(5);
-	gpio_set_value(SABRESD_CSI0_RST, 0);
 	msleep(1);
-	gpio_set_value(SABRESD_CSI0_RST, 1);
-	msleep(5);
 	gpio_set_value(SABRESD_CSI0_PWN, 1);
 
 	/* For MX6Q:
@@ -545,12 +557,65 @@ static void mx6q_csi0_io_init(void)
 		mxc_iomux_set_gpr_register(13, 0, 3, 4);
 }
 
+static void mx6q_csi1_io_init(void)
+{
+	if (cpu_is_mx6q())
+		mxc_iomux_v3_setup_multiple_pads(mx6q_sabresd_csi0_sensor_pads,
+			ARRAY_SIZE(mx6q_sabresd_csi0_sensor_pads));
+
+	/* Camera reset */
+	gpio_request(SABRESD_CSI0_RST, "cam-reset");
+	gpio_direction_output(SABRESD_CSI0_RST, 1);
+
+	/* Camera power down */
+	gpio_request(SABRESD_CSI0_PWN, "cam-pwdn");
+	gpio_direction_output(SABRESD_CSI0_PWN, 1);
+	msleep(1);
+	gpio_set_value(SABRESD_CSI0_PWN, 1);
+
+	gpio_request(SABRESD_MIPICSI_PWN, "cam-pwdn2");
+	gpio_direction_output(SABRESD_MIPICSI_PWN, 1);
+	msleep(1);
+	gpio_set_value(SABRESD_MIPICSI_PWN, 1);
+
+	/* For MX6Q:
+	 * GPR1 bit19 and bit20 meaning:
+	 * Bit19:       0 - Enable mipi to IPU1 CSI0
+	 *                      virtual channel is fixed to 0
+	 *              1 - Enable parallel interface to IPU1 CSI0
+	 * Bit20:       0 - Enable mipi to IPU2 CSI1
+	 *                      virtual channel is fixed to 3
+	 *              1 - Enable parallel interface to IPU2 CSI1
+	 * IPU1 CSI1 directly connect to mipi csi2,
+	 *      virtual channel is fixed to 1
+	 * IPU2 CSI0 directly connect to mipi csi2,
+	 *      virtual channel is fixed to 2
+	 *
+	 * For MX6DL:
+	 * GPR13 bit 0-2 IPU_CSI0_MUX
+	 *   000 MIPI_CSI0
+	 *   100 IPU CSI0
+	 */
+	if (cpu_is_mx6q())
+		mxc_iomux_set_gpr_register(1, 19, 1, 1);
+	else if (cpu_is_mx6dl())
+		mxc_iomux_set_gpr_register(13, 0, 3, 4);
+}
+
 static struct fsl_mxc_camera_platform_data camera_data = {
-	.mclk = 24000000,
+	.mclk = 22000000,
 	.mclk_source = 0,
 	.csi = 0,
 	.io_init = mx6q_csi0_io_init,
 	.pwdn = mx6q_csi0_cam_powerdown,
+};
+
+static struct fsl_mxc_camera_platform_data camera_data1 = {
+	.mclk = 22000000,
+	.mclk_source = 0,
+	.csi = 0,
+	.io_init = mx6q_csi1_io_init,
+	.pwdn = mx6q_csi1_cam_powerdown,
 };
 
 static void mx6q_mipi_powerdown(int powerdown)
@@ -593,12 +658,24 @@ static void mx6q_mipi_sensor_io_init(void)
 		mxc_iomux_set_gpr_register(13, 3, 3, 1);
 }
 
+#if 0
 static struct fsl_mxc_camera_platform_data mipi_csi2_data = {
 	.mclk = 24000000,
 	.mclk_source = 0,
 	.csi = 1,
 	.io_init = mx6q_mipi_sensor_io_init,
 	.pwdn = mx6q_mipi_powerdown,
+};
+#endif
+
+static struct
+{
+	//TODO
+	int fill;
+}
+novatek_ts_data =
+{
+	0,
 };
 
 #define mV_to_uV(mV) (mV * 1000)
@@ -785,21 +862,23 @@ static struct imxi2c_platform_data mx6q_sabresd_i2c_data = {
 	.bitrate = 100000,
 };
 
+#if 0
 static struct fsl_mxc_lightsensor_platform_data ls_data = {
 	.rext = 499,	/* calibration: 499K->700K */
 };
+#endif
 
 static struct i2c_board_info mxc_i2c0_board_info[] __initdata = {
 	{
-		I2C_BOARD_INFO("wm89**", 0x1a),
+		I2C_BOARD_INFO("es8388", 0x10),
 	},
 	{
-		I2C_BOARD_INFO("ov5642", 0x3c),
+		I2C_BOARD_INFO("gt2005", 0x3c),
 		.platform_data = (void *)&camera_data,
 	},
 	{
-		I2C_BOARD_INFO("mma8451", 0x1c),
-		.platform_data = (void *)&mma8451_position,
+		I2C_BOARD_INFO("gc0308", 0x21),
+		.platform_data = (void *)&camera_data1,
 	},
 };
 
@@ -807,22 +886,24 @@ static struct i2c_board_info mxc_i2c1_board_info[] __initdata = {
 	{
 		I2C_BOARD_INFO("mxc_hdmi_i2c", 0x50),
 	},
+#if 0
 	{
 		I2C_BOARD_INFO("ov5640_mipi", 0x3c),
 		.platform_data = (void *)&mipi_csi2_data,
 	},
+#endif
 	{
-		I2C_BOARD_INFO("egalax_ts", 0x4),
-		.irq = gpio_to_irq(SABRESD_CAP_TCH_INT0),
+		I2C_BOARD_INFO("novatek_ts", 0x1),
+		.platform_data = (void *)&novatek_ts_data,
+		.irq = gpio_to_irq(SABRESD_TS_INT),
 	},
 	{
-		I2C_BOARD_INFO("max11801", 0x48),
-		.platform_data = (void *)&max11801_mode,
-		.irq = gpio_to_irq(SABRESD_TS_INT),
+		I2C_BOARD_INFO("tsc2007_ts", 0x48),
 	},
 };
 
 static struct i2c_board_info mxc_i2c2_board_info[] __initdata = {
+#if 0
 	{
 		I2C_BOARD_INFO("max17135", 0x48),
 		.platform_data = &max17135_pdata,
@@ -844,9 +925,13 @@ static struct i2c_board_info mxc_i2c2_board_info[] __initdata = {
 		I2C_BOARD_INFO("elan-touch", 0x10),
 		.irq = gpio_to_irq(SABRESD_ELAN_INT),
 	},
+#endif
 	{
 		I2C_BOARD_INFO("mxc_ldb_i2c", 0x50),
 		.platform_data = (void *)0,
+	},
+	{
+		I2C_BOARD_INFO("mxc622x", 0x15),
 	},
 };
 
@@ -1805,10 +1890,9 @@ static void __init mx6_sabresd_board_init(void)
 	} else {
 		strcpy(mxc_i2c0_board_info[0].type, "wm8962");
 		mxc_i2c0_board_info[0].platform_data = &wm8962_config_data;
-#if 1
+
         strcpy(mxc_i2c0_board_info[0].type, "es8388");
         mxc_i2c0_board_info[0].platform_data = &es8388_config_data;
-#endif
 	}
 	imx6q_add_device_gpio_leds();
 
