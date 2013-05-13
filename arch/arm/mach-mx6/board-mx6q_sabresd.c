@@ -1379,7 +1379,7 @@ static const struct pm_platform_data mx6q_sabresd_pm_data __initconst = {
 };
 
 static struct regulator_consumer_supply sabresd_vmmc_consumers[] = {
-	REGULATOR_SUPPLY("vmmc", "sdhci-esdhc-imx.1"),
+//	REGULATOR_SUPPLY("vmmc", "sdhci-esdhc-imx.1"),
 	REGULATOR_SUPPLY("vmmc", "sdhci-esdhc-imx.2"),
 	REGULATOR_SUPPLY("vmmc", "sdhci-esdhc-imx.3"),
 };
@@ -1809,9 +1809,6 @@ static void __init mx6_sabresd_board_init(void)
 	gpio_direction_output(SABRESD_CABC_EN1, 0);
 
 	imx6q_add_mxc_pwm(0);
-	imx6q_add_mxc_pwm(1);
-	imx6q_add_mxc_pwm(2);
-	imx6q_add_mxc_pwm(3);
 	imx6q_add_mxc_pwm_backlight(0, &mx6_sabresd_pwm_backlight_data);
 
 	imx6q_add_otp();
