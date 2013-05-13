@@ -199,8 +199,8 @@
 #define SABRESD_ELAN_RST	IMX_GPIO_NR(3, 8)
 #define SABRESD_ELAN_INT	IMX_GPIO_NR(3, 28)
 
-static struct clk *sata_clk;
-static struct clk *clko;
+//static struct clk *sata_clk;
+//static struct clk *clko;
 //static int mma8451_position = 1;
 //static int mag3110_position = 2;
 //static int max11801_mode = 1;
@@ -214,23 +214,13 @@ extern int epdc_enabled;
 
 static int max17135_regulator_init(struct max17135 *max17135);
 
-static const struct esdhc_platform_data mx6q_sabresd_sd2_data __initconst = {
-	.cd_gpio = SABRESD_SD2_CD,
-	.wp_gpio = SABRESD_SD2_WP,
-	.keep_power_at_suspend = 1,
-	.support_8bit = 1,
-	.delay_line = 0,
-	.cd_type = ESDHC_CD_CONTROLLER,
-	.runtime_pm = 1,
-};
-
 static const struct esdhc_platform_data mx6q_sabresd_sd3_data __initconst = {
-	.cd_gpio = SABRESD_SD3_CD,
-	.wp_gpio = SABRESD_SD3_WP,
+	.cd_gpio = IMX_GPIO_NR(1, 9), //SABRESD_SD3_CD,
+	.wp_gpio = -1, //SABRESD_SD3_WP,
 	.keep_power_at_suspend = 1,
 	.support_8bit = 1,
 	.delay_line = 0,
-	.cd_type = ESDHC_CD_CONTROLLER,
+	.cd_type = ESDHC_CD_GPIO, //ESDHC_CD_CONTROLLER,
 };
 
 static const struct esdhc_platform_data mx6q_sabresd_sd4_data __initconst = {
@@ -254,26 +244,10 @@ static inline void mx6q_sabresd_init_uart(void)
 
 static int mx6q_sabresd_fec_phy_init(struct phy_device *phydev)
 {
-	unsigned short val;
-
-	/* To enable AR8031 ouput a 125MHz clk from CLK_25M */
-	phy_write(phydev, 0xd, 0x7);
-	phy_write(phydev, 0xe, 0x8016);
-	phy_write(phydev, 0xd, 0x4007);
-	val = phy_read(phydev, 0xe);
-
-	val &= 0xffe3;
-	val |= 0x18;
-	phy_write(phydev, 0xe, val);
-
-	/* Introduce tx clock delay */
-	phy_write(phydev, 0x1d, 0x5);
-	val = phy_read(phydev, 0x1e);
-	val |= 0x0100;
-	phy_write(phydev, 0x1e, val);
-
 	/*check phy power*/
-	val = phy_read(phydev, 0x0);
+	unsigned int val = phy_read(phydev, 0x0);
+
+	printk("mx6q_sabresd_fec_phy_init : val=0x%x\015\n", val);
 
 	if (val & BMCR_PDOWN)
 		phy_write(phydev, 0x0, (val & ~BMCR_PDOWN));
@@ -283,7 +257,7 @@ static int mx6q_sabresd_fec_phy_init(struct phy_device *phydev)
 
 static struct fec_platform_data fec_data __initdata = {
 	.init = mx6q_sabresd_fec_phy_init,
-	.phy = PHY_INTERFACE_MODE_RGMII,
+	.phy = PHY_INTERFACE_MODE_RMII, //PHY_INTERFACE_MODE_RGMII,
 };
 
 static int mx6q_sabresd_spi_cs[] = {
@@ -391,24 +365,22 @@ static int mxc_wm8958_init(void)
 	return 0;
 }
 
-static struct platform_device mx6_sabresd_audio_wm8962_device = {
-	.name = "imx-wm8962",
+static struct platform_device mx6_sabresd_audio_es8388_device = {
+	.name = "imx-es8388",
 };
 
-static struct mxc_audio_platform_data wm8962_data;
+static struct mxc_audio_platform_data es8388_data;
 
-static int wm8962_clk_enable(int enable)
+static int mx_es8388_device_init(void)
 {
-	if (enable)
-		clk_enable(clko);
-	else
-		clk_disable(clko);
-
-	return 0;
+#warning TODO
+    //TODO
+    return 0;
 }
 
 static int mxc_wm8962_init(void)
 {
+    struct clk *clko;
 	int rate;
 
 	clko = clk_get(NULL, "clko_clk");
@@ -417,10 +389,18 @@ static int mxc_wm8962_init(void)
 		return PTR_ERR(clko);
 	}
 	/* both audio codec and comera use CLKO clk*/
-	rate = clk_round_rate(clko, 24000000);
+	rate = clk_round_rate(clko, 13200000);
+
+	printk("#####mxc_wm8962_init rate = %d\n", rate);
+
+    es8388_data.sysclk = rate;
 	clk_set_rate(clko, rate);
 
-	wm8962_data.sysclk = rate;
+    /* enable wm8958 4.2v power supply */
+    gpio_request(SABRESD_CODEC_PWR_EN, "aud_4v2");
+    gpio_direction_output(SABRESD_CODEC_PWR_EN, 1);
+    msleep(1);
+    gpio_set_value(SABRESD_CODEC_PWR_EN, 1);
 
 	return 0;
 }
@@ -432,48 +412,13 @@ static struct wm8962_pdata wm8962_config_data = {
 	},
 };
 
-static struct mxc_audio_platform_data wm8962_data = {
+static struct mxc_audio_platform_data es8388_data = {
 	.ssi_num = 1,
 	.src_port = 2,
 	.ext_port = 3,
 	.hp_gpio = SABRESD_HEADPHONE_DET,
 	.hp_active_low = 1,
-	.mic_gpio = SABRESD_MICROPHONE_DET,
-	.mic_active_low = 1,
-	.init = mxc_wm8962_init,
-	.clock_enable = wm8962_clk_enable,
-};
-
-static struct regulator_consumer_supply sabresd_vwm8962_consumers[] = {
-	REGULATOR_SUPPLY("SPKVDD1", "0-001a"),
-	REGULATOR_SUPPLY("SPKVDD2", "0-001a"),
-};
-
-static struct regulator_init_data sabresd_vwm8962_init = {
-	.constraints = {
-		.name = "SPKVDD",
-		.valid_ops_mask =  REGULATOR_CHANGE_STATUS,
-		.boot_on = 1,
-	},
-	.num_consumer_supplies = ARRAY_SIZE(sabresd_vwm8962_consumers),
-	.consumer_supplies = sabresd_vwm8962_consumers,
-};
-
-static struct fixed_voltage_config sabresd_vwm8962_reg_config = {
-	.supply_name	= "SPKVDD",
-	.microvolts		= 4200000,
-	.gpio			= SABRESD_CODEC_PWR_EN,
-	.enable_high	= 1,
-	.enabled_at_boot = 1,
-	.init_data		= &sabresd_vwm8962_init,
-};
-
-static struct platform_device sabresd_vwm8962_reg_devices = {
-	.name	= "reg-fixed-voltage",
-	.id		= 4,
-	.dev	= {
-		.platform_data = &sabresd_vwm8962_reg_config,
-	},
+	.init = mx_es8388_device_init,
 };
 
 #if 1
@@ -1217,78 +1162,6 @@ static void __init imx6q_sabresd_init_usb(void)
 	mx6_usb_dr_init();
 }
 
-/* HW Initialization, if return 0, initialization is successful. */
-static int mx6q_sabresd_sata_init(struct device *dev, void __iomem *addr)
-{
-	u32 tmpdata;
-	int ret = 0;
-	struct clk *clk;
-
-	sata_clk = clk_get(dev, "imx_sata_clk");
-	if (IS_ERR(sata_clk)) {
-		dev_err(dev, "no sata clock.\n");
-		return PTR_ERR(sata_clk);
-	}
-	ret = clk_enable(sata_clk);
-	if (ret) {
-		dev_err(dev, "can't enable sata clock.\n");
-		goto put_sata_clk;
-	}
-
-	/* Set PHY Paremeters, two steps to configure the GPR13,
-	 * one write for rest of parameters, mask of first write is 0x07FFFFFD,
-	 * and the other one write for setting the mpll_clk_off_b
-	 *.rx_eq_val_0(iomuxc_gpr13[26:24]),
-	 *.los_lvl(iomuxc_gpr13[23:19]),
-	 *.rx_dpll_mode_0(iomuxc_gpr13[18:16]),
-	 *.sata_speed(iomuxc_gpr13[15]),
-	 *.mpll_ss_en(iomuxc_gpr13[14]),
-	 *.tx_atten_0(iomuxc_gpr13[13:11]),
-	 *.tx_boost_0(iomuxc_gpr13[10:7]),
-	 *.tx_lvl(iomuxc_gpr13[6:2]),
-	 *.mpll_ck_off(iomuxc_gpr13[1]),
-	 *.tx_edgerate_0(iomuxc_gpr13[0]),
-	 */
-	tmpdata = readl(IOMUXC_GPR13);
-	writel(((tmpdata & ~0x07FFFFFD) | 0x0593A044), IOMUXC_GPR13);
-
-	/* enable SATA_PHY PLL */
-	tmpdata = readl(IOMUXC_GPR13);
-	writel(((tmpdata & ~0x2) | 0x2), IOMUXC_GPR13);
-
-	/* Get the AHB clock rate, and configure the TIMER1MS reg later */
-	clk = clk_get(NULL, "ahb");
-	if (IS_ERR(clk)) {
-		dev_err(dev, "no ahb clock.\n");
-		ret = PTR_ERR(clk);
-		goto release_sata_clk;
-	}
-	tmpdata = clk_get_rate(clk) / 1000;
-	clk_put(clk);
-
-	ret = sata_init(addr, tmpdata);
-	if (ret == 0)
-		return ret;
-
-release_sata_clk:
-	clk_disable(sata_clk);
-put_sata_clk:
-	clk_put(sata_clk);
-
-	return ret;
-}
-
-static void mx6q_sabresd_sata_exit(struct device *dev)
-{
-	clk_disable(sata_clk);
-	clk_put(sata_clk);
-}
-
-static struct ahci_platform_data mx6q_sabresd_sata_data = {
-	.init = mx6q_sabresd_sata_init,
-	.exit = mx6q_sabresd_sata_exit,
-};
-
 static void mx6q_sabresd_flexcan0_switch(int enable)
 {
 	if (enable) {
@@ -1540,12 +1413,13 @@ static int __init imx6q_init_audio(void)
 
 		mxc_wm8958_init();
 	} else {
-		platform_device_register(&sabresd_vwm8962_reg_devices);
-		mxc_register_device(&mx6_sabresd_audio_wm8962_device,
-				    &wm8962_data);
-		imx6q_add_imx_ssi(1, &mx6_sabresd_ssi_pdata);
+	    printk("#####imx6q_init_audio\n");
 
-		mxc_wm8962_init();
+        mxc_register_device(&mx6_sabresd_audio_es8388_device,
+                    &es8388_data);
+        imx6q_add_imx_ssi(1, &mx6_sabresd_ssi_pdata);
+
+        mxc_wm8962_init();
 	}
 
 	return 0;
@@ -1779,17 +1653,6 @@ static void __init fixup_mxc_board(struct machine_desc *desc, struct tag *tags,
 	}
 }
 
-#if 0
-static struct mipi_csi2_platform_data mipi_csi2_pdata = {
-	.ipu_id	 = 0,
-	.csi_id = 1,
-	.v_channel = 0,
-	.lanes = 2,
-	.dphy_clk = "mipi_pllref_clk",
-	.pixel_clk = "emi_clk",
-};
-#endif
-
 #define SNVS_LPCR 0x38
 static void mx6_snvs_poweroff(void)
 {
@@ -1877,9 +1740,6 @@ static void __init mx6_sabresd_board_init(void)
 	imx6q_add_v4l2_output(0);
 	imx6q_add_v4l2_capture(0, &capture_data[0]);
 	imx6q_add_v4l2_capture(1, &capture_data[1]);
-#if 0
-	imx6q_add_mipi_csi2(&mipi_csi2_pdata);
-#endif
 	imx6q_add_imx_snvs_rtc();
 
 	imx6q_add_imx_caam();
@@ -1928,12 +1788,8 @@ static void __init mx6_sabresd_board_init(void)
 	*/
 	imx6q_add_sdhci_usdhc_imx(3, &mx6q_sabresd_sd4_data);
 	imx6q_add_sdhci_usdhc_imx(2, &mx6q_sabresd_sd3_data);
-	imx6q_add_sdhci_usdhc_imx(1, &mx6q_sabresd_sd2_data);
 	imx_add_viv_gpu(&imx6_gpu_data, &imx6q_gpu_pdata);
 	imx6q_sabresd_init_usb();
-	/* SATA is not supported by MX6DL/Solo */
-	if (cpu_is_mx6q())
-		imx6q_add_ahci(0, &mx6q_sabresd_sata_data);
 	imx6q_add_vpu();
 	imx6q_init_audio();
 	platform_device_register(&sabresd_vmmc_reg_devices);
