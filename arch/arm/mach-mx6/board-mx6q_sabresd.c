@@ -86,8 +86,8 @@
 
 #define SABRESD_USR_DEF_GRN_LED	IMX_GPIO_NR(1, 1)
 #define SABRESD_USR_DEF_RED_LED	IMX_GPIO_NR(1, 2)
-#define SABRESD_VOLUME_UP	IMX_GPIO_NR(1, 4)
-#define SABRESD_VOLUME_DN	IMX_GPIO_NR(1, 5)
+#define SABRESD_VOLUME_UP	IMX_GPIO_NR(1, 5)
+#define SABRESD_VOLUME_DN	IMX_GPIO_NR(1, 4)
 #define SABRESD_MICROPHONE_DET	IMX_GPIO_NR(1, 9)
 #define SABRESD_CSI0_PWN	IMX_GPIO_NR(1, 16)
 #define SABRESD_CSI0_RST	IMX_GPIO_NR(1, 17)
@@ -1549,8 +1549,9 @@ static void __init imx6q_add_device_gpio_leds(void) {}
 }
 
 static struct gpio_keys_button sabresd_buttons[] = {
-	GPIO_BUTTON(SABRESD_VOLUME_UP, KEY_VOLUMEUP, 1, "volume-up", 0, 1),
-	GPIO_BUTTON(SABRESD_VOLUME_DN, KEY_POWER, 1, "volume-down", 1, 1),
+	GPIO_BUTTON(SABRESD_VOLUME_UP, KEY_VOLUMEUP, 1, "btn volume-up", 0, 1),
+	GPIO_BUTTON(SABRESD_VOLUME_DN, KEY_VOLUMEDOWN, 1, "btn volume-down", 0, 1),
+	GPIO_BUTTON(SABRESD_POWER_OFF, KEY_POWER, 1, "btn power", 1, 1),
 };
 
 static struct gpio_keys_platform_data sabresd_button_data = {
@@ -1558,21 +1559,13 @@ static struct gpio_keys_platform_data sabresd_button_data = {
 	.nbuttons	= ARRAY_SIZE(sabresd_buttons),
 };
 
-static struct gpio_keys_button new_sabresd_buttons[] = {
-	GPIO_BUTTON(SABRESD_VOLUME_UP, KEY_VOLUMEUP, 1, "volume-up", 0, 1),
-	GPIO_BUTTON(SABRESD_VOLUME_DN, KEY_VOLUMEDOWN, 1, "volume-down", 1, 1),
-	GPIO_BUTTON(SABRESD_POWER_OFF, KEY_POWER, 1, "power-key", 1, 1),
-};
-
-static struct gpio_keys_platform_data new_sabresd_button_data = {
-	.buttons	= new_sabresd_buttons,
-	.nbuttons	= ARRAY_SIZE(new_sabresd_buttons),
-};
-
 static struct platform_device sabresd_button_device = {
 	.name		= "gpio-keys",
 	.id		= -1,
 	.num_resources  = 0,
+    .dev    = {
+        .platform_data = &sabresd_button_data,
+    },
 };
 
 static void __init imx6q_add_device_buttons(void)
@@ -1596,17 +1589,6 @@ static void __init imx6q_add_device_buttons(void)
 	 *	3 Act as power key to let device suspend/resume
 	 *	4 Act screenshort(hold power key and volume down key for 2s)
 	 */
-#if 0
-	if (mx6q_revision() >= IMX_CHIP_REVISION_1_2 ||
-			mx6dl_revision() >= IMX_CHIP_REVISION_1_1)
-		platform_device_add_data(&sabresd_button_device,
-				&new_sabresd_button_data,
-				sizeof(new_sabresd_button_data));
-	else
-		platform_device_add_data(&sabresd_button_device,
-				&sabresd_button_data,
-				sizeof(sabresd_button_data));
-#endif
 
 	platform_device_register(&sabresd_button_device);
 }
