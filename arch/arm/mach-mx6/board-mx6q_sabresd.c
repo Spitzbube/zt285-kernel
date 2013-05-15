@@ -615,7 +615,7 @@ static struct fsl_mxc_camera_platform_data mipi_csi2_data = {
 
 static struct
 {
-	//TODO
+#warning TODO
 	int fill;
 }
 novatek_ts_data =
@@ -1304,14 +1304,36 @@ static struct fsl_mxc_ldb_platform_data ldb_data = {
 	.sec_disp_id = 0,
 };
 
+static struct platform_device Data_c0bede90 = {
+    .name   = "zt_battery",
+    .id = -1,
+};
+
+static struct
+{
+#warning TODO
+    int Data_0;
+}
+Data_c0bee168 = {
+    0,
+};
+
+static struct platform_device Data_c0bedd28 = {
+    .name   = "wifi_power",
+    .id = -1,
+    .dev    = {
+        .platform_data = &Data_c0bee168,
+    },
+};
+
 static struct max8903_pdata charger1_data = {
-	.dok = SABRESD_CHARGE_DOK_B,
-	.uok = SABRESD_CHARGE_UOK_B,
-	.chg = SABRESD_CHARGE_CHG_1_B,
-	.flt = SABRESD_CHARGE_FLT_1_B,
-	.dcm_always_high = true,
-	.dc_valid = true,
-	.usb_valid = true,
+    .dok = SABRESD_CHARGE_DOK_B,
+    .uok = SABRESD_CHARGE_UOK_B,
+    .chg = SABRESD_CHARGE_CHG_1_B,
+    .flt = SABRESD_CHARGE_FLT_1_B,
+    .dcm_always_high = true,
+    .dc_valid = true,
+    .usb_valid = true,
 };
 
 static struct platform_device sabresd_max8903_charger_1 = {
@@ -1680,6 +1702,22 @@ static int __init early_enable_lcd_ldb(char *p)
 }
 early_param("enable_lcd_ldb", early_enable_lcd_ldb);
 
+
+static void func_c04cfd14(void)
+{
+#warning TODO
+    int reg;
+
+    printk("anatop_iomux_config : reg = 0x%x\015\n", reg);
+
+    printk("anatop_iomux_config2 : reg = 0x%x\015\n", reg);
+
+    printk("anatop_iomux_config3 : reg = 0x%x\015\n", reg);
+
+    printk("anatop_iomux_config4 : reg = 0x%x\015\n", reg);
+}
+
+
 /*!
  * Board specific initialization.
  */
@@ -1894,27 +1932,53 @@ static void __init mx6_sabresd_board_init(void)
 	pm_power_off = mx6_snvs_poweroff;
 	imx6q_add_busfreq();
 
-	/* Add PCIe RC interface support */
-	imx6q_add_pcie(&mx6_sabresd_pcie_data);
-	if (cpu_is_mx6dl()) {
-		mxc_iomux_v3_setup_multiple_pads(mx6dl_arm2_elan_pads,
-						ARRAY_SIZE(mx6dl_arm2_elan_pads));
+	//func_c04cfd14();
 
-		/* ELAN Touchscreen */
-		gpio_request(SABRESD_ELAN_INT, "elan-interrupt");
-		gpio_direction_input(SABRESD_ELAN_INT);
+	printk("snowwan GPIO inital begin \n");
 
-		gpio_request(SABRESD_ELAN_CE, "elan-cs");
-		gpio_direction_output(SABRESD_ELAN_CE, 1);
-		gpio_direction_output(SABRESD_ELAN_CE, 0);
+	gpio_request(IMX_GPIO_NR(4, 15), "SYS_PWR_CTR");
+    gpio_direction_output(IMX_GPIO_NR(4, 15), 1);
+    gpio_set_value(IMX_GPIO_NR(4, 15), 1);
 
-		gpio_request(SABRESD_ELAN_RST, "elan-rst");
-		gpio_direction_output(SABRESD_ELAN_RST, 1);
-		gpio_direction_output(SABRESD_ELAN_RST, 0);
-		mdelay(1);
-		gpio_direction_output(SABRESD_ELAN_RST, 1);
-		gpio_direction_output(SABRESD_ELAN_CE, 1);
+    gpio_request(IMX_GPIO_NR(3, 21), "PWR_5V_ON");
+    gpio_direction_output(IMX_GPIO_NR(3, 21), 1);
+    gpio_set_value(IMX_GPIO_NR(3, 21), 1);
+
+    gpio_request(IMX_GPIO_NR(3, 31), "USB_HOST_VBUS");
+    gpio_direction_output(IMX_GPIO_NR(3, 31), 1);
+    gpio_set_value(IMX_GPIO_NR(3, 31), 1);
+
+    gpio_request(IMX_GPIO_NR(1, 8), "LCD_PWR_EN");
+    gpio_direction_output(IMX_GPIO_NR(1, 8), 0);
+    gpio_set_value(IMX_GPIO_NR(1, 8), 0);
+
+    gpio_request(IMX_GPIO_NR(1, 7), "LCD_PWR_EN1");
+    gpio_direction_output(IMX_GPIO_NR(1, 7), 1);
+    gpio_set_value(IMX_GPIO_NR(1, 7), 1);
+
+    gpio_request(IMX_GPIO_NR(4, 14), "audio_mute");
+    gpio_direction_output(IMX_GPIO_NR(4, 14), 0);
+    gpio_set_value(IMX_GPIO_NR(4, 14), 0);
+
+	printk("snowwan GPIO inital end \n");
+
+	ret = gpio_request(IMX_GPIO_NR(3, 31), "wifi_power_gpio");
+	if (ret < 0)
+	{
+	    printk("touch_enable : request gpio failed,cannot wake up controller:%d\n", ret);
 	}
+
+	platform_device_register(&Data_c0bedd28);
+	platform_device_register(&Data_c0bede90);
+
+	printk("0x020C4060 : reg = 0x%x\015\n", readl(MX6_IO_ADDRESS(0x020C4060)));
+
+    clko2 = clk_get(NULL, "clko2_clk");
+    clk_set_rate(clko2, 12158000);
+    clk_enable(clko2);
+
+    clko = clk_get(NULL, "clko_clk");
+    clk_set_rate(clko, 11000000);
 
 	imx6_add_armpmu();
 	imx6q_add_perfmon(0);
