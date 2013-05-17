@@ -205,6 +205,7 @@
 //static int mag3110_position = 2;
 //static int max11801_mode = 1;
 static int enable_lcd_ldb;
+static int Data_c0c201b4;
 
 
 extern char *gp_reg_id;
@@ -613,13 +614,78 @@ static struct fsl_mxc_camera_platform_data mipi_csi2_data = {
 };
 #endif
 
+
+static int touch_init_irq(int irq)
+{
+    int ret;
+
+    printk("touch_init_irq \n");
+    printk("touch_init_irq irq = %d, gpio=%d\n", irq, SABRESD_TS_INT);
+
+    ret = gpio_request(SABRESD_TS_INT, "touch_int");
+    if (ret < 0)
+    {
+        printk("touch_init_irq : request gpio failed,cannot wake up controller:%d\n", ret);
+    }
+    else
+    {
+        ret = irq;
+        gpio_direction_input(SABRESD_TS_INT);
+    }
+
+    return ret;
+}
+
+static int func_c04d0348(void)
+{
+    return __gpio_get_value(SABRESD_TS_INT);
+}
+
+static int func_c04d0034(int a)
+{
+    int ret;
+
+    printk("touch_enable %d\n", a);
+
+    if (Data_c0c201b4 == 0)
+    {
+        ret = gpio_request(IMX_GPIO_NR(4, 11), "touch_enable");
+        if (ret < 0)
+        {
+            printk("touch_enable : request gpio failed,cannot wake up controller:%d\n", ret);
+            return ret;
+        }
+
+        Data_c0c201b4 = 1;
+    }
+
+    ret = 0;
+
+    if (a)
+    {
+        gpio_direction_output(IMX_GPIO_NR(4, 11), 1);
+    }
+    else
+    {
+        gpio_direction_output(IMX_GPIO_NR(4, 11), 0);
+    }
+
+    return ret;
+}
+
 static struct
 {
 #warning TODO
+    int (*a)(int);
+    int (*b)(void);
+    int (*c)(int);
 	int fill;
 }
 novatek_ts_data =
 {
+    touch_init_irq,
+    func_c04d0348,
+    func_c04d0034,
 	0,
 };
 
@@ -1685,17 +1751,32 @@ static int __init early_enable_lcd_ldb(char *p)
 early_param("enable_lcd_ldb", early_enable_lcd_ldb);
 
 
-static void func_c04cfd14(void)
+/*static*/ void func_c04cfd14(void)
 {
-#warning TODO
     int reg;
 
+    //IOMUXC_SW_MUX_CTL_PAD_GPIO01
+    writel(3, MX6_IO_ADDRESS(0x020E0224));
+
+    //IOMUXC_SW_PAD_CTL_PAD_GPIO01
+    writel(0x1b0b0, MX6_IO_ADDRESS(0x020E05F4));
+
+    reg = readl(IOMUXC_GPR1);
     printk("anatop_iomux_config : reg = 0x%x\015\n", reg);
 
+    writel(reg | 0x2000, IOMUXC_GPR1);
+
+    reg = readl(IOMUXC_GPR1);
     printk("anatop_iomux_config2 : reg = 0x%x\015\n", reg);
 
+    //IOMUXC_SW_PAD_CTL_PAD_SD2_CMD
+    reg = readl(MX6_IO_ADDRESS(0x020E0740));
     printk("anatop_iomux_config3 : reg = 0x%x\015\n", reg);
 
+    reg &= ~0x1000;
+    writel(reg, MX6_IO_ADDRESS(0x020E0740));
+
+    reg = readl(MX6_IO_ADDRESS(0x020E0740));
     printk("anatop_iomux_config4 : reg = 0x%x\015\n", reg);
 }
 
@@ -1914,7 +1995,7 @@ static void __init mx6_sabresd_board_init(void)
 	pm_power_off = mx6_snvs_poweroff;
 	imx6q_add_busfreq();
 
-	//func_c04cfd14();
+	func_c04cfd14();
 
 	printk("snowwan GPIO inital begin \n");
 

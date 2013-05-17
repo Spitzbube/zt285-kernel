@@ -330,19 +330,15 @@ static void __init setup_command_line(char *command_line)
 	saved_command_line = alloc_bootmem(strlen (boot_command_line)+1);
 	static_command_line = alloc_bootmem(strlen (command_line)+1);
 #if 1
-#if 0
+	//Framebuffer console on LVDS
     strcpy(boot_command_line, "console=tty0,115200 video=mxcfb0 video=mxcfb1:dev=hdmi,1920x1080M@60,if=RGB24 fbmem=10M,28M vmalloc=512M noinitrd");
     strcpy(saved_command_line, "console=tty0,115200 video=mxcfb0 video=mxcfb1:dev=hdmi,1920x1080M@60,if=RGB24 fbmem=10M,28M vmalloc=512M noinitrd");
     strcpy(static_command_line, "console=tty0,115200 video=mxcfb0 video=mxcfb1:dev=hdmi,1920x1080M@60,if=RGB24 fbmem=10M,28M vmalloc=512M noinitrd");
 #else
+    //Framebuffer console on HDMI
     strcpy(boot_command_line, "console=tty0,115200 video=mxcfb0:dev=hdmi,1920x1080M@60,if=RGB24 video=mxcfb1:dev=ldb,LDB-SVGA,if=RGB666 fbmem=28M,10M vmalloc=512M noinitrd");
     strcpy(saved_command_line, "console=tty0,115200 video=mxcfb0:dev=hdmi,1920x1080M@60,if=RGB24 video=mxcfb1:dev=ldb,LDB-SVGA,if=RGB666 fbmem=28M,10M vmalloc=512M noinitrd");
     strcpy(static_command_line, "console=tty0,115200 video=mxcfb0:dev=hdmi,1920x1080M@60,if=RGB24 video=mxcfb1:dev=ldb,LDB-SVGA,if=RGB666 fbmem=28M,10M vmalloc=512M noinitrd");
-#endif
-#else
-    strcpy(boot_command_line, "console=ttymxc1,115200 video=mxcfb0 video=mxcfb1:dev=hdmi,1920x1080M@60,if=RGB24 fbmem=10M,28M vmalloc=512M noinitrd");
-    strcpy(saved_command_line, "console=ttymxc1,115200 video=mxcfb0 video=mxcfb1:dev=hdmi,1920x1080M@60,if=RGB24 fbmem=10M,28M vmalloc=512M noinitrd");
-    strcpy(static_command_line, "console=ttymxc1,115200 video=mxcfb0 video=mxcfb1:dev=hdmi,1920x1080M@60,if=RGB24 fbmem=10M,28M vmalloc=512M noinitrd");
 #endif
 }
 

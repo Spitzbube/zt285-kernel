@@ -2063,7 +2063,7 @@ static void __init mx6_arm2_init(void)
 	 * S/PDIF out and can1 stby are mutually exclusive because both
 	 * use GPIO_17.
 	 */
-#ifndef CONFIG_FEC_1588
+//#ifndef CONFIG_FEC_1588
 	if (spdif_en) {
 		BUG_ON(!spdif_pads);
 		mxc_iomux_v3_setup_multiple_pads(spdif_pads, spdif_pads_cnt);
@@ -2071,7 +2071,8 @@ static void __init mx6_arm2_init(void)
 		BUG_ON(!i2c3_pads);
 		mxc_iomux_v3_setup_multiple_pads(i2c3_pads, i2c3_pads_cnt);
 	}
-#else
+#if 0
+//#else
 	/* Set GPIO_16 input for IEEE-1588 ts_clk and RMII reference clock
 	 * For MX6 GPR1 bit21 meaning:
 	 * Bit21:       0 - GPIO_16 pad output
