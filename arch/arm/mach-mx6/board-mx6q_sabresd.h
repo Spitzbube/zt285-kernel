@@ -28,10 +28,13 @@ static iomux_v3_cfg_t mx6q_sabresd_pads[] = {
 	MX6Q_PAD_CSI0_DAT7__AUDMUX_AUD3_RXD,
 
 	/* CAN1  */
-	MX6Q_PAD_KEY_ROW2__HDMI_TX_CEC_LINE,
-	/* MX6Q_PAD_KEY_COL2__CAN1_TXCAN, */
+//	MX6Q_PAD_KEY_ROW2__HDMI_TX_CEC_LINE,
+    MX6Q_PAD_KEY_ROW2__CAN1_RXCAN,
+    /* MX6Q_PAD_KEY_COL2__CAN1_TXCAN, */
+#if 0
 	MX6Q_PAD_GPIO_1__WDOG2_WDOG_B,		/*WDOG_B to reset pmic*/
 	MX6Q_PAD_GPIO_2__GPIO_1_2,		/* user defined red led */
+#endif
 	MX6Q_PAD_GPIO_7__GPIO_1_7,		/* NERR */
 
 	/* CCM  */
@@ -46,6 +49,16 @@ static iomux_v3_cfg_t mx6q_sabresd_pads[] = {
 	/* ENET */
 	MX6Q_PAD_ENET_MDIO__ENET_MDIO,
 	MX6Q_PAD_ENET_MDC__ENET_MDC,
+#if 1
+    (iomux_v3_cfg_t)(0x0b616018484f81e4),
+    (iomux_v3_cfg_t)(0x0b6160184c4f41e0),
+    (iomux_v3_cfg_t)(0x0b616018584f01dc),
+    (iomux_v3_cfg_t)(0x03616010005041f0), //17
+    (iomux_v3_cfg_t)(0x03616010005001ec), //18
+    (iomux_v3_cfg_t)(0x03616010004fc1e8), //19
+    (iomux_v3_cfg_t)(0x03616010004ec1d8), //20
+    (iomux_v3_cfg_t)(0x04000050003c00ac), //21
+#else
 	MX6Q_PAD_RGMII_TXC__ENET_RGMII_TXC,
 	MX6Q_PAD_RGMII_TD0__ENET_RGMII_TD0,
 	MX6Q_PAD_RGMII_TD1__ENET_RGMII_TD1,
@@ -61,10 +74,13 @@ static iomux_v3_cfg_t mx6q_sabresd_pads[] = {
 	MX6Q_PAD_RGMII_RX_CTL__ENET_RGMII_RX_CTL,
 	MX6Q_PAD_ENET_TX_EN__GPIO_1_28,		/* Micrel RGMII Phy Interrupt */
 	MX6Q_PAD_EIM_D23__GPIO_3_23,		/* RGMII reset */
+#endif
 	MX6Q_PAD_GPIO_16__ENET_ANATOP_ETHERNET_REF_OUT, /* Internal connect for 1588 TS Clock */
 
+#if 0
 	/* GPIO1 */
 	MX6Q_PAD_ENET_RX_ER__GPIO_1_24,		/* J9 - Microphone Detect */
+#endif
 
 	/* GPIO2 */
 	/* MX6Q_PAD_NANDF_D1__GPIO_2_1,*/	/* J14 - Menu Button */
@@ -181,12 +197,16 @@ static iomux_v3_cfg_t mx6q_sabresd_pads[] = {
 	MX6Q_PAD_EIM_D24__UART3_TXD,
 	MX6Q_PAD_EIM_D25__UART3_RXD,
 
+#if 0
 	/* USBOTG ID pin */
 	MX6Q_PAD_ENET_RX_ER__ANATOP_USBOTG_ID,
+#endif
 
 	/* USB power pin */
 	MX6Q_PAD_EIM_D22__GPIO_3_22,
+#if 0
 	MX6Q_PAD_ENET_TXD1__GPIO_1_29,
+#endif
 
 	/* USB OC pin */
 	MX6Q_PAD_EIM_D21__USBOH3_USBOTG_OC,
@@ -194,7 +214,9 @@ static iomux_v3_cfg_t mx6q_sabresd_pads[] = {
 
 	/* USDHC2 */
 	MX6Q_PAD_SD2_CLK__USDHC2_CLK,
+#if 0
 	MX6Q_PAD_SD2_CMD__USDHC2_CMD,
+#endif
 	MX6Q_PAD_SD2_DAT0__USDHC2_DAT0,
 	MX6Q_PAD_SD2_DAT1__USDHC2_DAT1,
 	MX6Q_PAD_SD2_DAT2__USDHC2_DAT2,
@@ -238,7 +260,9 @@ static iomux_v3_cfg_t mx6q_sabresd_pads[] = {
 	MX6Q_PAD_EIM_DA13__GPIO_3_13, /* CHG_2_B  */
 	MX6Q_PAD_EIM_DA14__GPIO_3_14, /* FLT_2_B */
 
+#if 0
 	MX6Q_PAD_ENET_RXD0__GPIO_1_27, /* UOK_B */
+#endif
 	MX6Q_PAD_EIM_CS1__GPIO_2_24,   /* DOK_B */
 
 	/* Audio Codec */
@@ -259,10 +283,26 @@ static iomux_v3_cfg_t mx6q_sabresd_pads[] = {
 	MX6Q_PAD_NANDF_CS0__GPIO_6_11,
 	/* DISP_PWR_EN */
 	MX6Q_PAD_NANDF_CS1__GPIO_6_14,
+
+#if 1
+       (iomux_v3_cfg_t)(0x04000050003d00bc),
+       (iomux_v3_cfg_t)(0x04000050005dc20c),
+       (iomux_v3_cfg_t)(0x04000050003b80a4),
+       (iomux_v3_cfg_t)(0x04000050005ec21c),
+       (iomux_v3_cfg_t)(0x0400005000614244),
+       (iomux_v3_cfg_t)(0x0400005000610240),
+       (iomux_v3_cfg_t)(0x04000050003e40d0),
+       (iomux_v3_cfg_t)(0x04000030005f4224),
+       (iomux_v3_cfg_t)(0x0400005000604234),
+       (iomux_v3_cfg_t)(0x0400005000740358),
+#endif
+
+#if 0
 	/* CABC_EN0 */
 	MX6Q_PAD_NANDF_CS2__GPIO_6_15,
 	/* CABC_EN1 */
 	MX6Q_PAD_NANDF_CS3__GPIO_6_16,
+#endif
 };
 
 static iomux_v3_cfg_t mx6q_sabresd_csi0_sensor_pads[] = {
@@ -284,6 +324,8 @@ static iomux_v3_cfg_t mx6q_sabresd_csi0_sensor_pads[] = {
 
 	MX6Q_PAD_SD1_DAT0__GPIO_1_16,		/* camera PWDN */
 	MX6Q_PAD_SD1_DAT1__GPIO_1_17,		/* camera RESET */
+
+	(iomux_v3_cfg_t)(0x040000500073434c),
 };
 
 static iomux_v3_cfg_t mx6q_sabresd_mipi_sensor_pads[] = {
